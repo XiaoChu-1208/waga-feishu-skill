@@ -318,5 +318,6 @@ lark-cli im +messages-send --as bot \
 ## 注意
 
 - **Waga/lark-cli 自己开不了终端、启动不了 Claude Code**，只能驱动已开着的会话 → 用户出门前要先把当天要用的窗口都开好、各自 `/waga-on` 起名。关窗口=Monitor 自动失效，无残留；改名=同窗口重跑 `/waga-on <新名>`。
+- **用户要远程「起个新 session」时**：跑 `bash "${WAGA_DIR}/waga-spawn.sh" <名字> "初始任务" "<工作目录>"`（后台），拉起一个 headless worker（`claude -p --resume` 保持上下文，自己收发飞书）。需用户预先在 settings.json 手动加 `Bash(bash "…/waga-spawn.sh"*)` 允许规则（带 `--dangerously-skip-permissions`，Claude 不能自我授权）。worker 用 `<名字>: /stop` 远程关闭。
 - token 过期时（一般每 ~7 天）监听器会喷 `[WAGA-ERR]`，让用户跑 `lark-cli auth login --domain all` 重新扫码
 - 一个 session 一个 NAME；如果用户在两个窗口跑了同 name 的 waga-on，他们都会响应同前缀消息（不致命但容易让用户糊涂），通过上线回执用户能立刻发现重名
