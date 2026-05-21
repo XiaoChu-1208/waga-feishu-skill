@@ -128,16 +128,20 @@ while true; do
   # 心跳：每轮写 epoch|name|cwd，/who 据此判断谁活着
   echo "$(date +%s)|${NAME}|${CWD}" > "$ALIVE"
 
+  # 内容里的换行压成空格，避免多行消息被拆成多条幻影记录
   out=$(lark-cli im +chat-messages-list --chat-id "$CHAT" --as bot \
-    --jq '.data.messages[] | select(.sender.sender_type=="user") | .message_id + "\t" + .create_time + "\t" + .content' 2>&1)
+    --jq '.data.messages[] | select(.sender.sender_type=="user") | .message_id + "\t" + .create_time + "\t" + ((.content // "")|tostring|gsub("\n";" "))' 2>&1)
 
-  if echo "$out" | grep -qiE 'secret invalid|token.*expired|invalid_token|99991|10014'; then
+  # 错误识别：token 失效 + API 报错(ok:false/5xx/api_error)。命中就跳过本轮，绝不把报错 JSON 当消息解析
+  if echo "$out" | grep -qiE 'secret invalid|token.*expired|invalid_token|99991|10014|"ok" *: *false|api_error|HTTP [45][0-9][0-9]|internal error'; then
     echo "[WAGA-ERR] $(echo "$out" | tr '\n' ' ' | cut -c1-200)"
     sleep 30; continue
   fi
 
   printf '%s\n' "$out" | while IFS=$'\t' read -r mid ctime content; do
     [ -z "$mid" ] && continue
+    # 兜底：只有真正的消息 id(om_ 开头)才处理，挡住任何非消息行（错误 JSON 片段等）
+    case "$mid" in om_*) ;; *) continue ;; esac
     grep -qF "$mid" "$SEEN" && continue
 
     # /who：读心跳文件给完整名单；文件锁保证一条 /who 只一个 monitor 应答（不刷屏）

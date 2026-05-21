@@ -99,11 +99,17 @@ while true; do
   if [ -f "$STOPFILE" ]; then send "headless worker 下线（stopfile）"; rm -f "$STOPFILE" "$ALIVE"; exit 0; fi
   echo "$(date +%s)|${NAME}|${WORKDIR}" > "$ALIVE"
   out=$(lark-cli im +chat-messages-list --chat-id "$CHAT" --as bot \
-    --jq '.data.messages[] | select(.sender.sender_type=="user") | .message_id + "\t" + .content' 2>&1)
+    --jq '.data.messages[] | select(.sender.sender_type=="user") | .message_id + "\t" + ((.content // "")|tostring|gsub("\n";" "))' 2>&1)
+
+  # API 报错(token失效/ok:false/5xx)就跳过本轮，绝不把报错 JSON 当消息
+  if echo "$out" | grep -qiE 'secret invalid|token.*expired|invalid_token|99991|10014|"ok" *: *false|api_error|HTTP [45][0-9][0-9]|internal error'; then
+    sleep 30; continue
+  fi
 
   # 用 here-string 跑主循环，避免 pipe 子shell 吃掉 exit
   while IFS=$'\t' read -r mid content; do
     [ -z "$mid" ] && continue
+    case "$mid" in om_*) ;; *) continue ;; esac   # 只处理真消息 id
     grep -qF "$mid" "$SEEN" && continue
     # 远程关闭：api: /stop  或  [api] /stop
     case "$content" in
