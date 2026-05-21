@@ -317,5 +317,6 @@ lark-cli im +messages-send --as bot \
 
 ## 注意
 
+- **Waga/lark-cli 自己开不了终端、启动不了 Claude Code**，只能驱动已开着的会话 → 用户出门前要先把当天要用的窗口都开好、各自 `/waga-on` 起名。关窗口=Monitor 自动失效，无残留；改名=同窗口重跑 `/waga-on <新名>`。
 - token 过期时（一般每 ~7 天）监听器会喷 `[WAGA-ERR]`，让用户跑 `lark-cli auth login --domain all` 重新扫码
 - 一个 session 一个 NAME；如果用户在两个窗口跑了同 name 的 waga-on，他们都会响应同前缀消息（不致命但容易让用户糊涂），通过上线回执用户能立刻发现重名
