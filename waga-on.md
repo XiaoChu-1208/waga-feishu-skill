@@ -79,11 +79,17 @@ ALIVE="/tmp/waga_alive_${NAME}.txt"
 touch "$SEEN"
 [ -f "$STICKY" ] || echo "main" > "$STICKY"
 
-# 路由到我时：先给气泡贴 OnIt(处理中) reaction，再 emit（带 mid，便于回完信换 DONE 绿勾）
+# 路由到我时：瞬间贴中性「处理中」标记（OnIt+Typing），再 emit。
+# ⚠ 情绪表情不在这里贴——情绪要呼应用户当下心情（怒→歉、喜→庆、悲→慰），
+#   只有读完内容的我（大模型）能判断。所以 emit 只管中性标记，情绪层由我回信时按内容补。
+# （带 mid，便于回完信用 waga-react.sh done 把 OnIt/Typing 换成 DONE 绿勾，情绪表情保留）
 emit() {
   local m="$1" ct="$2" body="$3"
-  lark-cli im reactions create --as bot --params "{\"message_id\":\"$m\"}" \
-    --data '{"reaction_type":{"emoji_type":"OnIt"}}' >/dev/null 2>&1
+  for e in OnIt Typing; do
+    lark-cli im reactions create --as bot --params "{\"message_id\":\"$m\"}" \
+      --data "{\"reaction_type\":{\"emoji_type\":\"$e\"}}" >/dev/null 2>&1
+    sleep 0.35
+  done
   echo "[WAGA-MSG] $ct [mid=$m] :: $body"
 }
 
@@ -290,14 +296,21 @@ lark-cli im +messages-send --as bot \
 
 仿 OpenClaw 的体验：给用户消息**气泡本身**打表情（不是回一条表情消息），让用户隔着飞书也知道"在转"。
 
-- **自动开工标记**：Monitor 的 `emit()` 一路由到我就给气泡贴 `OnIt`(处理中)，无需手动。`[WAGA-MSG]` 行带 `[mid=...]`，回信时从这里取 message_id。
-- **完成收尾**：回完信后把 OnIt 换成 `DONE`(绿勾)：
+- **自动中性标记**：Monitor 的 `emit()` 一路由到我就瞬间贴 `OnIt`(处理中)+`Typing`(打字)，纯状态、不带情绪。`[WAGA-MSG]` 行带 `[mid=...]`，回信时从这里取 message_id。
+- **情绪层（核心，必做）**：我读完消息后**判断用户此刻的情绪并呼应它**——这才是"活"。不是随便贴几个，是共情：
+  - 用户**开心/兴奋** → 跟着乐：`LAUGH JOYFUL PARTY Fire CLAP WOW`
+  - 用户**赞同/夸我/感谢** → 谦逊收下：`THUMBSUP Salute HEART OK`
+  - 用户**愤怒/不满/被我惹毛** → 认错示弱、别嬉皮：`Sigh Salute`（绝不贴庆祝类）
+  - 用户**难过/沮丧** → 共情安慰：`Sigh HEART Salute`
+  - 用户**惊叹/牛了** → 接梗：`WOW MUSCLE APPLAUSE Fire`
+  - 用户**纯指令/中性** → 轻回应即可：`THUMBSUP OK`，或只留中性标记不加情绪
+  ```bash
+  bash "${WAGA_DIR}/waga-react.sh" vibe <mid> "LAUGH JOYFUL Fire CLAP"
+  ```
+  ⚠ 情绪要跟用户**对齐**：他怒你别乐，他丧你别嗨。可用负面/共情表情很少（飞书 API 就放行 `Sigh`/`Salute` 这类），但方向对了比数量重要。
+- **完成收尾**：回完信后把临时标记（OnIt+Typing）换成 `DONE`(绿勾)，情绪表情保留当氛围：
   ```bash
   bash "${WAGA_DIR}/waga-react.sh" done <mid>
-  ```
-- **生动模式**（可选，应景加戏）：根据消息情绪贴一串表情（≤10，自动限速）：
-  ```bash
-  bash "${WAGA_DIR}/waga-react.sh" vibe <mid> "THUMBSUP Fire PARTY LAUGH"
   ```
 - ⚠ **emoji_type 大小写敏感、是 key 一部分**：`Fire`✓ `FIRE`✗（返 231001）。连发太快也会 231001 → 用 helper 自带限速。一条消息上限 ~10 个。**别信 WebFetch 文档小模型瞎编的清单**，靠 `reactions list` 回读验证。
 - 已实证调色板：`OnIt DONE Typing` / `THUMBSUP CLAP APPLAUSE MUSCLE` / `LAUGH SMILE JOYFUL PARTY Fire WOW` / `HEART LOVE MeMeMe Get OK HUSKY`（详见 waga-react.sh 头注释）。

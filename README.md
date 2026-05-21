@@ -1,181 +1,222 @@
-# Waga · 飞书 ↔ Claude Code 远程路由 skill
+<div align="center">
 
-用**飞书私聊**远程指挥跑在电脑上的 [Claude Code](https://claude.com/claude-code) 会话——人在外面，手机一条消息就能精准呼叫某一个 session，让它干活、收报告。多个 session 同时挂载互不打架。
+# Waga · 用飞书远程指挥 Claude Code
 
-还附带 **OpenClaw 同款气泡 reaction**：消息一被接走，对应气泡上自动冒出「处理中」表情，干完换成绿勾，远程也能直观看到进度。
+**把跑在你电脑上的 [Claude Code](https://claude.com/claude-code) 变成一个能用飞书私聊远程操控的 AI 智能体** —— 人在外面，手机一条消息就能精准呼叫某个会话干活、看进度、收报告。
 
-> 这是一个 Claude Code 的 **slash-command skill**（`/waga-on`）。核心是一段挂在 Claude Code 后台的 Monitor 脚本，长轮询飞书私聊、按前缀把消息路由到对应会话。
+*Drive Claude Code remotely from Feishu / Lark IM — like [OpenClaw](https://github.com/) or Hermes, but for Claude Code, powered by `lark-cli`.*
 
----
+`Claude Code` · `Feishu` · `Lark` · `飞书` · `remote agent` · `mobile control` · `lark-cli` · `IM bot` · `slash command` · `multi-session routing` · `message reactions`
 
-## 它解决什么问题
-
-Claude Code 跑在你的电脑上，但你出门了。你想用手机让它：
-- 「去把那个 build 跑一下」
-- 「capstoryboard 那个会话，帮我看下报错」
-- 同时开着三四个 session，想精准点名其中一个，而不是让所有会话一起抢答。
-
-挂上 `/waga-on` 后，每个会话各自盯着同一个飞书 bot 私聊，只认带自己 name 前缀的消息。你在飞书发 `csb: 跑下测试`，就只有名叫 `csb` 的会话响应。
+</div>
 
 ---
 
-## 前置条件
+## 这是什么 / What it is
 
-### 1. 一个飞书自建机器人（bot）
+Waga 是一个 **Claude Code slash-command skill**（`/waga-on`）。挂上之后，你的每个 Claude Code 会话都会盯着同一个飞书机器人私聊，**只响应带自己名字前缀的消息**。于是你可以：
 
-去 [飞书开放平台](https://open.feishu.cn/) 建一个企业自建应用，开通机器人能力，拿到 `App ID` / `App Secret`。需要的权限（scope）：
+- 人在地铁上，用手机飞书发一句「`build 跑一下`」，电脑上的 Claude Code 就开工；
+- 同时开三四个会话（前端、后端、文档…），用 `c:` / `web:` 精准点名其中一个，其余不抢答；
+- 隔着飞书也能看到进度：消息一被接走，气泡上自动冒出「处理中」表情，干完变绿勾。
+
+> 一句话定位：**Waga = 把 Claude Code 当 OpenClaw / Hermes 那样的远程 IM 智能体来用**。核心是给 `lark-cli`（飞书命令行）套一层会话路由 + 状态反馈，让「远程操控本地 AI coding agent」这件事在飞书里变顺。
+
+## 为什么需要它 / Why
+
+Claude Code 很强，但它跑在你的电脑上、绑在终端里。你一旦离开座位，它就停摆了。市面上 OpenClaw、Hermes 这类工具把 AI agent 接进 IM 实现远程操控——Waga 做的是同一件事，但**专门面向 Claude Code + 飞书**，而且：
+
+- **零额外服务**：不用部署 server、不用 webhook 公网回调，就是一段挂在 Claude Code 后台的 Monitor 脚本 + `lark-cli` 长轮询。
+- **多会话精准路由**：手机友好的冒号语法，一个 bot 管多个会话互不打架。
+- **情绪化的气泡反馈**：仿 OpenClaw 的消息 reaction，且情绪会**呼应你当下的心情**（你急它致歉、你乐它跟着乐）。
+
+---
+
+## 功能亮点 / Features
+
+| | |
+|---|---|
+| 🎯 **多会话精准路由** | 一个飞书 bot，多个 Claude Code 会话各认各的前缀，`c:` / `web:` 点名互不干扰 |
+| 📱 **手机友好语法** | 冒号一统「切换/一次性」，中英文冒号都认，全角 `：` 也行，单手可打 |
+| 📌 **粘性目标** | `c:` 单独发一条就把后续无前缀消息都粘到 c，长聊不用每条加前缀 |
+| 💓 **心跳 + /who** | 每个会话写心跳文件，`/who` 一键报数（谁在线、哪个目录、多久没动静） |
+| 🤖 **气泡 reaction** | 消息被接走自动贴「处理中」，干完换绿勾，远程可见状态 |
+| ❤️ **情绪呼应** | 读完消息按你心情贴表情：开心→庆祝、愤怒→致歉、沮丧→安慰，不是乱贴 |
+| 🏷️ **可换皮** | 一条命令把 `Waga` 整套改名成你自己的品牌（`/ali-on` / `/bilu-on`） |
+| 🔒 **零硬编码** | 所有账号信息走环境变量，仓库里不含任何私密标识 |
+
+---
+
+## 前置条件 / Prerequisites
+
+### 1. 一个飞书自建机器人
+
+去 [飞书开放平台](https://open.feishu.cn/) 建企业自建应用，开通机器人能力，拿到 `App ID` / `App Secret`。需要的权限：
 
 - `im:message`（收发消息）
-- `im:message.group_at_msg` / `im:message:readonly`（读会话历史）
+- `im:message:readonly`（读会话历史）
 - `im:message.reaction`（给消息打表情，reaction 功能需要）
 
 把机器人加进**你和它的单聊**（P2P 会话）。
 
-### 2. lark-cli（飞书命令行工具）
+### 2. lark-cli（飞书命令行）
 
-本 skill 所有飞书交互都通过 `lark-cli`。需要先安装并以 **bot 身份**登录授权：
+Waga 所有飞书交互都通过 [`lark-cli`](https://github.com/) 完成。先安装并以 **bot 身份**登录：
 
 ```bash
-lark-cli auth login --domain all     # 扫码授权；token 一般 ~7 天过期，过期重跑即可
+lark-cli auth login --domain all     # 扫码授权；token 约 7 天过期，过期重跑
 ```
-
-> lark-cli 是飞书官方/社区的 CLI（提供 `lark-cli im +messages-send`、`im reactions` 等子命令）。请按你获取到的渠道安装。
 
 ### 3. 三个环境变量
 
-挂载脚本和 helper 都从环境变量读配置，**不硬编码**任何账号信息：
+脚本全部从环境变量读配置，**不硬编码**：
 
-| 变量 | 含义 | 怎么拿 |
-|---|---|---|
-| `WAGA_CHAT_ID` | 你和 bot 私聊的 `chat_id`（`oc_` 开头） | 见下方「拿 ID」 |
-| `WAGA_USER_ID` | 你自己的 `open_id`（`ou_` 开头，回信发给谁） | 见下方「拿 ID」 |
-| `WAGA_DIR` | 本仓库脚本所在目录（含 `waga-reply.sh` / `waga-react.sh`） | 你 clone 的路径 |
+| 变量 | 含义 |
+|---|---|
+| `WAGA_CHAT_ID` | 你和 bot 私聊的 `chat_id`（`oc_` 开头） |
+| `WAGA_USER_ID` | 你自己的 `open_id`（`ou_` 开头，回信发给谁） |
+| `WAGA_DIR` | 本仓库脚本所在目录 |
 
-建议写进 shell profile（`.bashrc` / `.zshrc` / PowerShell `$PROFILE`）：
+写进 shell profile：
 
 ```bash
-export WAGA_CHAT_ID="oc_xxxxxxxxxxxxxxxx"
-export WAGA_USER_ID="ou_xxxxxxxxxxxxxxxx"
+export WAGA_CHAT_ID="oc_xxxxxxxxxxxx"
+export WAGA_USER_ID="ou_xxxxxxxxxxxx"
 export WAGA_DIR="$HOME/path/to/waga-feishu-skill"
-export LARK_CLI_NO_PROXY=1     # 见下方「注意 · 代理」
+export LARK_CLI_NO_PROXY=1     # lark-cli 走系统代理易被 reset，强制直连
 ```
 
-#### 拿 ID
-
-和 bot 互发一条消息后，列一下会话历史，里面就有 `chat_id` 和你的 `open_id`：
+**怎么拿 ID**：和 bot 互发一条消息后列会话历史，里面就有 `chat_id` 和你的 `open_id`：
 
 ```bash
-# 找 chat_id：列出 bot 所在的单聊
-lark-cli im +chat-list --as bot --jq '.data.items[] | {chat_id, name, chat_mode}'
-
-# 找你自己的 open_id：在那个 chat 里发条消息，然后看历史里 sender 的 id
-lark-cli im +chat-messages-list --chat-id "<上一步的 oc_...>" --as bot \
+lark-cli im +chat-list --as bot --jq '.data.items[] | {chat_id, name}'
+lark-cli im +chat-messages-list --chat-id "<oc_...>" --as bot \
   --jq '.data.messages[] | {sender: .sender.id, type: .sender.sender_type}'
 ```
 
 ---
 
-## 安装为 Claude Code skill
+## 安装 / Install
 
-把 `waga-on.md` 放进 Claude Code 的命令目录，它就会作为 `/waga-on` 出现：
+把 `waga-on.md` 放进 Claude Code 命令目录，它就成了 `/waga-on`：
 
 ```bash
-# 用户级（所有项目可用）
 cp waga-on.md ~/.claude/commands/waga-on.md
-# 脚本留在仓库里即可，靠 $WAGA_DIR 引用；确保可执行
 chmod +x waga-reply.sh waga-react.sh
 ```
 
-> 不用 Claude Code 也能用：`waga-on.md` 里那段挂载脚本是普通 bash，可单独跑；只是没有「事件唤醒会话」那层，需要自己读 `[WAGA-MSG]` 输出。
-
 ---
 
-## 用法
+## 用法 / Usage
 
 ### 挂载
 
 在某个 Claude Code 会话里：
 
 ```
-/waga-on            # name = 当前目录 basename
-/waga-on csb        # 自定义 name（手机上 1-2 字符最省事：m / c / w / csb）
+/waga-on            # name = 当前目录名
+/waga-on c          # 自定义 name（手机上 1-2 字符最省事）
 ```
 
-挂上后会立刻往飞书发两条上线回执（name + cwd + 时间 + 用法提示），你在飞书侧就能看到「这个 name 对应哪个目录的会话」。
-
-同一会话再次 `/waga-on <新名>` 是**改名**（先停旧监听再挂新的），不会叠加。
+挂上后立刻往飞书发上线回执（name + cwd + 时间）。同一会话再 `/waga-on <新名>` 是**改名**（先停旧的再挂新的），不叠加。
 
 ### 飞书侧路由语法（手机友好）
 
-冒号一统天下，靠**冒号后有没有内容**区分「切粘性」和「一次性」。中英文冒号都认（手机中文键盘默认出全角 `：`）。
+冒号一统天下，靠**冒号后有没有内容**区分「切粘性」和「一次性」。中英文冒号都认。
 
 | 用法 | 例子 | 含义 |
 |---|---|---|
-| **无前缀** | `你看看 build.bat` | 发给「当前粘性目标」会话（默认 `main`） |
-| **粘性切换** | `c:` 或 `c：`（单独一条） | 把粘性目标切到 `c`，之后无前缀消息都到 c |
-| **冒号一次性** | `c: 帮我跑测试` | 只这一条给 c，不改粘性目标 |
-| **方括号一次性** | `[c] 帮我跑`（PC 习惯） | 同冒号一次性 |
+| **无前缀** | `你看看 build.bat` | 发给当前粘性目标会话（默认 `main`） |
+| **粘性切换** | `c:` / `c：`（单独一条） | 把粘性目标切到 `c` |
+| **冒号一次性** | `c: 跑下测试` | 只这一条给 c |
+| **方括号一次性** | `[c] 跑下测试` | 同上，PC 习惯 |
 | **全员报数** | `/who` | 列出所有在线会话（含 cwd、心跳新鲜度） |
 
-最常用：手机想找 `c` 长聊 → 发 `c：` → 之后随便说啥都自动到 c → 想切回去发 `main：`。
+最常用：想找 `c` 长聊 → 发 `c：` → 之后随便说啥都到 c → 发 `main：` 切回去。
 
-### 气泡 reaction（处理中 / 完成 / 生动）
+### 气泡 reaction 与情绪呼应
 
-- **自动开工标记**：消息一被路由到某会话，监听器立刻给那条**气泡本身**贴 `OnIt`（处理中），无需手动。
-- **完成收尾**：会话回完信后把 `OnIt` 换成 `DONE`（绿勾）：
-  ```bash
-  bash "$WAGA_DIR/waga-react.sh" done <message_id>
-  ```
-- **生动模式**：根据消息情绪贴一串表情（≤10，自动限速）：
-  ```bash
-  bash "$WAGA_DIR/waga-react.sh" vibe <message_id> "THUMBSUP Fire PARTY LAUGH"
-  ```
+- **自动状态标记**：消息被路由到某会话，瞬间贴 `OnIt`(处理中) + `Typing`(打字)，纯状态。
+- **情绪呼应**：会话读完消息后**判断你的情绪并呼应**——你开心它庆祝、你愤怒它致歉、你沮丧它安慰，不是随便贴。
+- **完成收尾**：回完信把状态标记换成 `DONE`(绿勾)，情绪表情保留当氛围。
 
-`message_id` 从监听器推送的 `[WAGA-MSG] <时间> [mid=om_xxx] :: <内容>` 那行取。
+```bash
+bash "$WAGA_DIR/waga-react.sh" vibe <mid> "LAUGH JOYFUL Fire CLAP"   # 按情绪贴一串
+bash "$WAGA_DIR/waga-react.sh" done <mid>                            # 收尾换绿勾
+```
 
-> ⚠ **emoji_type 大小写敏感、是 key 的一部分**：`Fire` 有效、`FIRE` 报 `231001 invalid`。连发太快也会触发 231001，所以 helper 自带 0.6s 限速。一条消息 reaction 上限约 10 个。**别信网页文档里 LLM 总结的表情清单**（容易瞎编对不上），以真机 `lark-cli im reactions list` 回读为准。
->
-> 实证可用调色板：`OnIt DONE Typing` · `THUMBSUP CLAP APPLAUSE MUSCLE` · `LAUGH SMILE JOYFUL PARTY Fire WOW` · `HEART LOVE MeMeMe Get OK HUSKY`（详见 `waga-react.sh` 头注释）。
+> ⚠ 飞书 `emoji_type` **大小写敏感、是 key 的一部分**：`Fire` 有效、`FIRE` 报 `231001`。连发太快也会 231001（helper 自带限速）。一条消息上限约 10 个。可用调色板见 `waga-react.sh` 头注释；负面/共情表情飞书放行得少（基本 `Sigh`/`Salute`），方向对齐比数量重要。
 
 ### 回信
 
-会话给飞书回话用 helper（自动加 `[name]` 前缀、自动设 `LARK_CLI_NO_PROXY=1`）：
-
 ```bash
-bash "$WAGA_DIR/waga-reply.sh" <name> "<回复内容>"
+bash "$WAGA_DIR/waga-reply.sh" <name> "<回复内容>"   # 自动加 [name] 前缀、设 NO_PROXY
 ```
 
 ---
 
-## 工作原理
+## 换皮改名 / Rebrand
 
-- 每个会话跑一个独立的后台 **Monitor**，长轮询飞书私聊历史（`lark-cli im +chat-messages-list`，~15s 一轮）。
-- 用 `/tmp/waga_seen_<name>.txt` 记已处理消息去重；`/tmp/waga_sticky.txt` 存共享的粘性目标（初始 `main`）。
-- 每轮写心跳 `/tmp/waga_alive_<name>.txt`（`epoch|name|cwd`），`/who` 据此判断谁活着（35s 内有心跳=活）；文件锁保证一条 `/who` 只一个会话应答、不刷屏。
-- 命中给本会话的消息时，先贴 `OnIt` reaction，再 emit `[WAGA-MSG]` 事件唤醒会话。
+不喜欢叫 Waga？一条命令全套改名（命令名、脚本名、事件标记、临时文件、环境变量）：
+
+```bash
+bash rebrand.sh ali        # /waga-on → /ali-on，WAGA_CHAT_ID → ALI_CHAT_ID …
+bash rebrand.sh Bilu
+```
+
+改完记得：① 重设 `<新名大写>_CHAT_ID` 等环境变量；② 装进 `~/.claude/commands/` 的那份也改名成 `<新名>-on.md`（命令名 = 文件名）。
+
+---
+
+## 工作原理 / How it works
+
+- 每个会话跑一个独立后台 **Monitor**，长轮询飞书私聊历史（`lark-cli im +chat-messages-list`，~15s 一轮）。
+- `/tmp/waga_seen_<name>.txt` 去重；`/tmp/waga_sticky.txt` 存共享粘性目标；`/tmp/waga_alive_<name>.txt` 写心跳供 `/who` 判活。
+- 命中给本会话的消息 → 先贴状态 reaction → emit `[WAGA-MSG]` 事件唤醒会话。
 - 会话关闭 = Monitor 死 = 自动注销，无残留。
 
-详细脚本见 [`waga-on.md`](./waga-on.md)。
+详见 [`waga-on.md`](./waga-on.md)。
+
+## 注意 / Caveats
+
+- **代理**：`lark-cli` 走系统代理易被 reset，所有调用前设 `LARK_CLI_NO_PROXY=1`（helper 已内置）。
+- **token 过期**：约每 7 天，监听器喷 `[WAGA-ERR]`，重跑 `lark-cli auth login --domain all`。
+- **一会话一 name**：两个窗口挂同名会都响应（通过上线回执能立刻发现）。
+- **隐私**：`WAGA_CHAT_ID` / `WAGA_USER_ID` 是你私人的飞书标识，只进环境变量，别提交进仓库。
 
 ---
 
-## 注意
+## FAQ
 
-- **代理**：`lark-cli` 走系统代理时容易被 reset，所有调用前设 `LARK_CLI_NO_PROXY=1`（helper 已内置）。
-- **token 过期**：一般每 ~7 天，监听器会喷 `[WAGA-ERR]`，重跑 `lark-cli auth login --domain all` 扫码即可。
-- **一个会话一个 name**：两个窗口挂了同名 `waga-on` 会都响应同前缀消息（不致命，但通过上线回执能立刻发现重名）。
-- **隐私**：`WAGA_CHAT_ID` / `WAGA_USER_ID` 是你私人的飞书标识，只放进环境变量、别提交进仓库或贴公开处。
+**Q: 跟 OpenClaw / Hermes 有什么关系？**
+A: 思路一样——把 AI agent 接进 IM 远程操控。Waga 专做 **Claude Code + 飞书**，更轻（无需部署服务），并加了多会话路由和情绪化反馈。
+
+**Q: 必须用 Claude Code 吗？**
+A: skill 形态是给 Claude Code 的。但 `waga-on.md` 里那段挂载脚本是普通 bash，可单独跑，只是少了「事件唤醒会话」那层。
+
+**Q: 支持飞书国际版 Lark 吗？**
+A: 支持，`lark-cli` 同时覆盖飞书与 Lark；建机器人和拿 ID 的流程一致。
+
+**Q: 会泄露我的聊天/账号吗？**
+A: 不会。所有账号标识走环境变量，仓库零硬编码。
 
 ---
 
-## 文件清单
+## 文件清单 / Files
 
 | 文件 | 作用 |
 |---|---|
 | `waga-on.md` | skill 本体：`/waga-on` 说明 + 挂载用的 Monitor 脚本 |
-| `waga-reply.sh` | 回信 helper：加 `[name]` 前缀、设 NO_PROXY、发到飞书私聊 |
+| `waga-reply.sh` | 回信 helper |
 | `waga-react.sh` | 气泡表情 helper：`add` / `done` / `clear` / `vibe` |
+| `rebrand.sh` | 一键换皮改名 |
 
 ## License
 
-MIT
+[MIT](./LICENSE)
+
+---
+
+<div align="center">
+<sub>Keywords: Claude Code Feishu integration · control Claude Code from Lark · 飞书远程操控 Claude Code · Claude Code mobile remote · lark-cli automation · Claude Code IM bot · OpenClaw / Hermes alternative for Claude Code · 用手机指挥 AI coding agent</sub>
+</div>

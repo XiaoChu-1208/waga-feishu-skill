@@ -10,11 +10,15 @@
 # ⚠ emoji_type 大小写敏感，是 key 的一部分。FIRE 无效、Fire 才对。
 #    不在下表的别乱试——错的会返回 231001。WebFetch 文档那个小模型会瞎编，别信。
 #
-# 已实证可用调色板（canonical 形式）：
-#   开工/收工：  OnIt(处理中) DONE(绿勾) Typing(打字中)
-#   点赞鼓掌：  THUMBSUP CLAP APPLAUSE MUSCLE
-#   开心欢庆：  LAUGH SMILE JOYFUL PARTY Fire WOW
-#   情绪：      HEART LOVE MeMeMe Get OK HUSKY
+# 已实证可用调色板（canonical 形式）+ 情绪映射（要呼应用户当下心情）：
+#   状态：      OnIt(处理中) Typing(打字) DONE(绿勾)
+#   开心/兴奋：  LAUGH JOYFUL PARTY Fire CLAP WOW
+#   赞同/感谢：  THUMBSUP OK Get Salute(敬礼/收到)
+#   暖心/喜欢：  HEART LOVE SMILE
+#   佩服/牛了：  WOW MUSCLE APPLAUSE
+#   认错/无奈/共情：Sigh(叹气) Salute   ← 用户怒/丧时用这类，别贴庆祝
+#   卖萌/调皮：  MeMeMe HUSKY
+# ⚠ 飞书 API 放行的 key 有限，负面情绪基本只有 Sigh/Salute；方向对齐比数量重要。
 #
 # 例：
 #   bash waga-react.sh add  om_xxx OnIt                          # 收到消息先贴“处理中”
@@ -74,7 +78,9 @@ case "$MODE" in
     echo "cleared $EMOJI on $MID"
     ;;
   done)
+    # 清掉临时「处理中」标记（OnIt + Typing），换成 DONE 绿勾；情绪表情保留当氛围
     react_clear "$MID" "OnIt"
+    react_clear "$MID" "Typing"
     rid=$(react_add "$MID" "DONE")
     echo "done(DONE) -> ${rid:-ERR}"
     ;;
