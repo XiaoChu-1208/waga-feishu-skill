@@ -20,6 +20,7 @@ waga-card.py — 给【已开窗口的活会话】用的步进式进度卡片。
 start 会打印 message_id 到 stdout。done/error 跑完清状态文件。
 """
 import argparse
+import glob
 import importlib.util
 import json
 import os
@@ -118,6 +119,54 @@ def cmd_online(name, cwd, sticky):
     return 0
 
 
+def build_who_card(entries):
+    """/who 名册卡片。entries: [(name, type, cwd, age_sec)]，age<=35 视为 live。
+    统一模型(用户 2026-05-23):都是 worker，只分 windowed(有窗口/waga-on) vs headless(无窗口/spawn)。"""
+    body = [f"{WS.name_line('/who')}　waga 名册（35s 内有心跳 = live）"]
+    if not entries:
+        body.append("\n_（没有任何在线 worker）_")
+    else:
+        for nm, typ, cwd, age in entries:
+            live = age <= 35
+            status = "live" if live else "dead"
+            color = "green" if live else "red"
+            tcolor = "blue" if typ == "windowed" else ("grey" if typ == "headless" else "carmine")
+            body.append(
+                f"\n**{nm}** · <font color='{color}'>{status}</font>"
+                f" · <font color='{tcolor}'>{typ}</font> · {age}s · `{cwd}`"
+            )
+    return {
+        "schema": "2.0",
+        "config": {"summary": {"content": "/who waga 名册"}},
+        "body": {"elements": [{"tag": "markdown", "content": "".join(body)}]},
+    }
+
+
+def cmd_who():
+    now = time.time()
+    entries = []
+    for f in glob.glob(os.path.join(WS._tmpdir(), "waga_alive_*.txt")):
+        try:
+            line = open(f, encoding="utf-8").read().strip()
+        except OSError:
+            continue
+        parts = line.split("|")
+        if len(parts) < 3:
+            continue
+        epoch = int(parts[0]) if parts[0].lstrip("-").isdigit() else 0
+        nm, cwd = parts[1], parts[2]
+        typ = parts[3] if len(parts) >= 4 and parts[3] else "?(旧)"
+        entries.append((nm, typ, cwd, int(now - epoch)))
+    entries.sort(key=lambda e: e[3])  # 最新心跳在前
+    mid = WS.card_send(USER_OID, build_who_card(entries))
+    if not mid:
+        sys.stderr.write("[waga-card] who: card_send 失败\n")
+        return 1
+    WS.record_sent("who", mid)
+    print(mid)
+    return 0
+
+
 def cmd_start(name, text):
     st = {"mid": None, "body": text or "处理中…", "tools": [], "started": time.time()}
     mid = WS.card_send(USER_OID, _render(name, st, "running", "处理中…"))
@@ -189,11 +238,14 @@ def main():
     p = sub.add_parser("error"); p.add_argument("name"); p.add_argument("text", nargs="?", default="")
     p = sub.add_parser("say"); p.add_argument("name"); p.add_argument("text", nargs="?", default="")
     p = sub.add_parser("online"); p.add_argument("name"); p.add_argument("cwd"); p.add_argument("sticky", nargs="?", default="main")
+    p = sub.add_parser("who")
     a = ap.parse_args()
     if a.cmd == "say":
         sys.exit(cmd_say(a.name, a.text))
     elif a.cmd == "online":
         sys.exit(cmd_online(a.name, a.cwd, a.sticky))
+    elif a.cmd == "who":
+        sys.exit(cmd_who())
     elif a.cmd == "start":
         sys.exit(cmd_start(a.name, a.text))
     elif a.cmd == "step":

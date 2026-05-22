@@ -123,7 +123,8 @@ rm -f "$STOPFILE"
 while true; do
   # 本地关闭：touch 这个文件即可让 worker 优雅退出
   if [ -f "$STOPFILE" ]; then send "headless worker 下线（stopfile）"; rm -f "$STOPFILE" "$ALIVE"; exit 0; fi
-  echo "$(date +%s)|${NAME}|${WORKDIR}" > "$ALIVE"
+  # 心跳 epoch|name|cwd|type；type=headless：这是「无窗口的 worker」（spawn 的 headless 会话）
+  echo "$(date +%s)|${NAME}|${WORKDIR}|headless" > "$ALIVE"
   out=$(lark-cli im +chat-messages-list --chat-id "$CHAT" --as bot \
     --jq '.data.messages[] | select(.sender.sender_type=="user") | .message_id + "\t" + ((.content // "")|tostring|gsub("\n";" "))' 2>&1)
 

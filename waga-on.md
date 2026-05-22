@@ -112,8 +112,9 @@ esac
 echo "[WAGA] listener armed as [${NAME}]  cwd=${CWD}"
 
 while true; do
-  # 心跳：每轮写 epoch|name|cwd，/who 据此判断谁活着
-  echo "$(date +%s)|${NAME}|${CWD}" > "$ALIVE"
+  # 心跳：每轮写 epoch|name|cwd|type，/who 据此判断谁活着 + 区分有窗口/无窗口
+  # type=windowed：这是「有窗口的 worker」（开着的 Claude Code 窗口 + /waga-on 监听器）
+  echo "$(date +%s)|${NAME}|${CWD}|windowed" > "$ALIVE"
 
   # 内容里的换行压成空格，避免多行消息被拆成多条幻影记录
   out=$(lark-cli im +chat-messages-list --chat-id "$CHAT" --as bot \
@@ -142,33 +143,14 @@ while true; do
       continue
     fi
 
-    # /who：读心跳文件给完整名单；文件锁保证一条 /who 只一个 monitor 应答（不刷屏）
+    # /who：出一张名册卡片（waga-card.py who 读心跳文件，标 live/dead + windowed/headless）
+    # 文件锁保证一条 /who 只一个 worker 应答（不刷屏）
     case "$content" in
       "/who"|"/who "*)
         echo "$mid" >> "$SEEN"
         lockf="/tmp/waga_who_${mid}.lock"
         if ( set -o noclobber; echo "$NAME" > "$lockf" ) 2>/dev/null; then
-          now=$(date +%s)
-          report=""
-          for f in /tmp/waga_alive_*.txt; do
-            [ -e "$f" ] || continue
-            line=$(cat "$f" 2>/dev/null)
-            hb_epoch="${line%%|*}"; rest="${line#*|}"
-            hb_name="${rest%%|*}"; hb_cwd="${rest#*|}"
-            [ -z "$hb_epoch" ] && continue
-            age=$((now - hb_epoch))
-            if [ "$age" -le 35 ]; then
-              report="${report}
-  [${hb_name}] 活 · ${age}s前心跳 · ${hb_cwd}"
-            else
-              report="${report}
-  [${hb_name}] 疑似掉线 · ${age}s前心跳 · ${hb_cwd}"
-            fi
-          done
-          [ -z "$report" ] && report="
-  (无任何心跳文件)"
-          lark-cli im +messages-send --as bot --user-id "$USER" \
-            --text "[who] 当前 waga session（35s 内有心跳=活）:${report}" >/dev/null 2>&1
+          py "$WAGA_DIR/waga-card.py" who >/dev/null 2>&1
         fi
         continue
         ;;
