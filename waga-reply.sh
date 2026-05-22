@@ -22,14 +22,15 @@ shift
 TEXT="$*"
 
 export LARK_CLI_NO_PROXY=1
-USER_OID="${WAGA_USER_ID:?set WAGA_USER_ID}"
 
-response=$(lark-cli im +messages-send --as bot --user-id "$USER_OID" --text "[${NAME}] ${TEXT}" 2>&1)
+# 2026-05-22 起：回复走内联蓝字卡片（waga-card.py say），不再发 [name] 纯文本。
+# say 会自动登记卡片 mid 到 waga_sent.txt（供引用回复路由）。统一用 py 启动器。
+DIR="$(dirname "$0")"
+mid=$(py "$DIR/waga-card.py" say "$NAME" "$TEXT" 2>/dev/null | tr -d '\r\n')
 
-if echo "$response" | grep -q '"ok": *true'; then
-  msg_id=$(echo "$response" | grep -oE '"message_id": *"[^"]+"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
-  echo "ok: ${msg_id}"
+if [ -n "$mid" ]; then
+  echo "ok: ${mid}"
 else
-  echo "ERR: $response" >&2
+  echo "ERR: waga-card say 失败（name=$NAME）" >&2
   exit 1
 fi

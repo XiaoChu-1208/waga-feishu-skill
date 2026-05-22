@@ -34,16 +34,24 @@ SEEN="/tmp/waga_seen_${NAME}.txt"
 STICKY="/tmp/waga_sticky.txt"
 ALIVE="/tmp/waga_alive_${NAME}.txt"
 SIDFILE="/tmp/waga_session_${NAME}.txt"
+LOGF="/tmp/waga_stream_${NAME}.log"
+# 流式卡片引擎（借鉴 feishu-claude-code-bridge 的单卡片实时刷新体验）
+STREAM="$(dirname "$0")/waga-stream.py"
+# ⚠ Git Bash 里 `python` 是 WindowsApps 坏桩（exit 49 吞输出），一律用 `py` 启动器
+PY="py"
 touch "$SEEN"
 [ -f "$STICKY" ] || echo "main" > "$STICKY"
 
 # 固定 session-id（保持上下文；重启可续）
+new_sid() {
+  $PY -c 'import uuid;print(uuid.uuid4())' 2>/dev/null \
+    || powershell.exe -NoProfile -Command '[guid]::NewGuid().ToString()' 2>/dev/null | tr -d '\r'
+}
 if [ -f "$SIDFILE" ]; then
   SID="$(cat "$SIDFILE")"
   STARTED=1
 else
-  SID="$(python -c 'import uuid;print(uuid.uuid4())' 2>/dev/null \
-        || powershell.exe -NoProfile -Command '[guid]::NewGuid().ToString()' 2>/dev/null | tr -d '\r')"
+  SID="$(new_sid)"
   echo "$SID" > "$SIDFILE"
   STARTED=0
 fi
@@ -51,33 +59,49 @@ fi
 react() { lark-cli im reactions create --as bot --params "{\"message_id\":\"$1\"}" \
   --data "{\"reaction_type\":{\"emoji_type\":\"$2\"}}" >/dev/null 2>&1; }
 send() { lark-cli im +messages-send --as bot --user-id "$USER" --text "[${NAME}] $1" >/dev/null 2>&1; }
-
-# 跑一次 headless claude，保持上下文；返回结果文本
-run_claude() {
-  local msg="$1" out
-  if [ "$STARTED" = "0" ]; then
-    out=$(cd "$WORKDIR" && claude -p --session-id "$SID" --dangerously-skip-permissions "$msg" 2>&1)
-    STARTED=1
-  else
-    out=$(cd "$WORKDIR" && claude -p --resume "$SID" --dangerously-skip-permissions "$msg" 2>&1)
-  fi
-  printf '%s' "$out"
+unreact() {  # 删掉触发消息上的某个表情（用完 OnIt 换 DONE）
+  [ -z "$1" ] && return
+  lark-cli im reactions list --as bot --params "{\"message_id\":\"$1\"}" \
+    --jq ".data.items[]|select(.reaction_type.emoji_type==\"$2\").reaction_id" 2>/dev/null \
+    | tr -d '"' | while read -r r; do [ -n "$r" ] && lark-cli im reactions delete --as bot \
+    --params "{\"message_id\":\"$1\",\"reaction_id\":\"$r\"}" >/dev/null 2>&1; done
 }
 
-# 处理一条消息：贴 OnIt → 跑 claude → 回飞书 → 贴 DONE
+# 处理一条消息：贴 OnIt → 跑流式卡片 worker（自己发卡+实时 patch）→ 换 DONE
 handle() {
   local mid="$1" body="$2"
   [ -n "$mid" ] && react "$mid" OnIt
-  local reply; reply="$(run_claude "$body")"
-  # 飞书消息别太长，超长截断
-  if [ "${#reply}" -gt 1800 ]; then reply="${reply:0:1800}
-…（输出过长已截断）"; fi
-  [ -z "$reply" ] && reply="(claude 无输出)"
-  send "$reply"
-  [ -n "$mid" ] && { lark-cli im reactions list --as bot --params "{\"message_id\":\"$mid\"}" \
-      --jq '.data.items[]|select(.reaction_type.emoji_type=="OnIt").reaction_id' 2>/dev/null \
-      | tr -d '"' | while read -r r; do [ -n "$r" ] && lark-cli im reactions delete --as bot \
-      --params "{\"message_id\":\"$mid\",\"reaction_id\":\"$r\"}" >/dev/null 2>&1; done; react "$mid" DONE; }
+  local firstflag=""
+  if [ "$STARTED" = "0" ]; then firstflag="--first"; STARTED=1; fi
+  # waga-stream.py 自己发卡片到飞书并随 claude 输出实时刷新；stdout 是最终文本（这里丢弃）
+  $PY "$STREAM" --name "$NAME" --cwd "$WORKDIR" --sid "$SID" $firstflag \
+     --user "$USER" "$body" >/dev/null 2>>"$LOGF" \
+     || send "stream worker 异常，详见 $LOGF"
+  [ -n "$mid" ] && { unreact "$mid" OnIt; react "$mid" DONE; }
+}
+
+# 命令分发：/stop /status /cd 走特殊处理，其余交给 handle 跑流式卡片。
+# 调用方负责先把 mid 标记 SEEN。
+dispatch() {
+  local mid="$1" body="$2"
+  case "$body" in
+    "/stop"|"/stop "*)
+      send "收到，headless worker 下线"; rm -f "$ALIVE"; exit 0 ;;
+    "/status"|"/status "*)
+      send "状态 · cwd=${WORKDIR} · session=${SID:0:8}… · 粘性目标=$(cat "$STICKY" 2>/dev/null)"
+      [ -n "$mid" ] && react "$mid" DONE ;;
+    "/cd "*)
+      local np="${body#/cd }"; np="${np/#\~/$HOME}"
+      if [ -d "$np" ]; then
+        WORKDIR="$np"; SID="$(new_sid)"; echo "$SID" > "$SIDFILE"; STARTED=0
+        send "已切到 ${WORKDIR}（已新建 session）"
+      else
+        send "目录不存在：${np}"
+      fi
+      [ -n "$mid" ] && react "$mid" DONE ;;
+    *)
+      handle "$mid" "$body" ;;
+  esac
 }
 
 # seed：把现有消息标记已读，避免上线就处理历史
@@ -85,8 +109,10 @@ lark-cli im +chat-messages-list --chat-id "$CHAT" --as bot \
   --jq '.data.messages[].message_id' 2>/dev/null | tr -d '"' >> "$SEEN"
 
 send "headless worker 上线 · cwd=${WORKDIR} · session=${SID:0:8}…
-派活：[${NAME}] 任务  或  ${NAME}: 任务
-关闭：${NAME}: /stop"
+派活：${NAME}: 任务（结果走流式卡片实时刷新）
+切目录：${NAME}: /cd <路径>   看状态：${NAME}: /status
+关闭：${NAME}: /stop
+冒号语法会把粘性目标切到我；[${NAME}] 前缀是纯一次性"
 
 # 有初始任务就先干
 [ -n "$INIT_TASK" ] && handle "" "$INIT_TASK"
@@ -111,18 +137,46 @@ while true; do
     [ -z "$mid" ] && continue
     case "$mid" in om_*) ;; *) continue ;; esac   # 只处理真消息 id
     grep -qF "$mid" "$SEEN" && continue
-    # 远程关闭：api: /stop  或  [api] /stop
+    # 路由规则（与 waga-on.md 一致）：
+    #   冒号语法 name: / name:内容  → 切粘性到我 + 处理（新规则：带内容也切粘性）
+    #   方括号 [name] 内容          → 纯一次性，不动粘性
+    #   命令 /stop /status /cd 在 dispatch 里识别
     case "$content" in
-      "${NAME}: /stop"|"${NAME}：/stop"|"${NAME}：/stop "*|"${NAME}: /stop "*|"[${NAME}] /stop"*)
-        echo "$mid" >> "$SEEN"; send "收到，headless worker 下线"; rm -f "$ALIVE"; exit 0 ;;
-      "${NAME}:"|"${NAME}：")          echo "$mid" >> "$SEEN"; echo "$NAME" > "$STICKY"; send "已切粘性到我"; continue ;;
-      "${NAME}: "*|"${NAME}："*)       echo "$mid" >> "$SEEN"; handle "$mid" "${content#*[:：] }"; continue ;;
-      "[${NAME}] "*)                   echo "$mid" >> "$SEEN"; handle "$mid" "${content#\[${NAME}\] }"; continue ;;
-      "["*"]"*)                        continue ;;
+      "${NAME}:"|"${NAME}："|"${NAME}: "|"${NAME}： ")
+        # 冒号后只有空白 → 只切粘性，不跑
+        echo "$mid" >> "$SEEN"; echo "$NAME" > "$STICKY"; send "已切粘性到我"; continue ;;
+      "${NAME}:"*|"${NAME}："*)
+        # 冒号带内容 → 切粘性 + 处理
+        echo "$mid" >> "$SEEN"; echo "$NAME" > "$STICKY"
+        # ⚠ 不能用字符类 [:：] 去剥全角冒号——多字节字符会被按字节切坏。分别剥。
+        b="${content#${NAME}}"
+        case "$b" in
+          ":"*)  b="${b#:}"; b="${b# }" ;;
+          "："*) b="${b#：}"; b="${b# }" ;;
+        esac
+        dispatch "$mid" "$b"; continue ;;
+      "[${NAME}] "*)
+        # 方括号一次性：不动粘性
+        echo "$mid" >> "$SEEN"; dispatch "$mid" "${content#\[${NAME}\] }"; continue ;;
+      "[${NAME}]"*)
+        echo "$mid" >> "$SEEN"; dispatch "$mid" "${content#\[${NAME}\]}"; continue ;;
+      "["*"]"*)
+        continue ;;   # 给别的 session 的方括号前缀，跳过
+    esac
+    # 看起来是给别的 session 的「othername: 」前缀 → 跳过（别被粘性兜底误吞）
+    case "$content" in
+      *":"*)
+        first_token="${content%%:*}"
+        echo "$first_token" | grep -qE '^[a-zA-Z0-9_-]{1,16}$' && continue ;;
+    esac
+    case "$content" in
+      *"："*)
+        first_token="${content%%：*}"
+        echo "$first_token" | grep -qE '^[a-zA-Z0-9_-]{1,16}$' && continue ;;
     esac
     # 无前缀：粘性目标是我才接
     if [ "$(cat "$STICKY" 2>/dev/null)" = "$NAME" ]; then
-      echo "$mid" >> "$SEEN"; handle "$mid" "$content"
+      echo "$mid" >> "$SEEN"; dispatch "$mid" "$content"
     fi
   done <<< "$out"
   sleep 15

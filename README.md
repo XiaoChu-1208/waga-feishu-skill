@@ -72,8 +72,10 @@ Waga（和 lark-cli）**自己没法开终端、启动 Claude Code**。它只能
 | 📱 **手机友好语法** | 冒号一统「切换/一次性」，中英文冒号都认，全角 `：` 也行，单手可打 |
 | 📌 **粘性目标** | `c:` 单独发一条就把后续无前缀消息都粘到 c，长聊不用每条加前缀 |
 | 💓 **心跳 + /who** | 每个会话写心跳文件，`/who` 一键报数（谁在线、哪个目录、多久没动静） |
-| 🤖 **气泡 reaction** | 消息被接走自动贴「处理中」，干完换绿勾，远程可见状态 |
-| ❤️ **情绪呼应** | 读完消息按你心情贴表情：开心→庆祝、愤怒→致歉、沮丧→安慰，不是乱贴 |
+| 🪧 **流式 / 进度卡片** | 回复与干活进度刷在一张飞书交互卡片上实时更新（蓝运行/绿完成/红失败 + 工具调用），不再发一串刷屏文本（`waga-card.py` / `waga-stream.py`，借鉴 [feishu-claude-code-bridge](https://github.com/zarazhangrui/feishu-claude-code-bridge)） |
+| ↩️ **引用回复路由** | 在飞书里「引用」某个会话发的卡片回复，自动路由到那个会话并切粘性，连前缀都不用打 |
+| 🤖 **两层 reaction** | 状态层 `Typing→DONE`（处理中/完成，远程可见）+ 情绪层（读完按你心情亲贴一组真实表情） |
+| ❤️ **情绪呼应** | 情绪层每次按内容现挑、像人一样贴 2-4 个、绝不随机/复读：开心→庆祝、愤怒→致歉、沮丧→安慰 |
 | 🏷️ **可换皮** | 一条命令把 `Waga` 整套改名成你自己的品牌（`/ali-on` / `/bilu-on`） |
 | 🔒 **零硬编码** | 所有账号信息走环境变量，仓库里不含任何私密标识 |
 
@@ -98,6 +100,8 @@ Waga（和 lark-cli）**自己没法开终端、启动 Claude Code**。它只能
 如果你想手动配、或了解底层依赖：
 
 - **lark-cli**：飞书官方 CLI。装 + `lark-cli config init` + `lark-cli auth login --domain im` 即可，无需自建应用配 scope。
+- **Claude Code CLI**：`claude`，spawn worker / 流式卡片靠它的 `-p --output-format stream-json`。
+- **Python 3**（仅卡片功能 `waga-card.py` / `waga-stream.py` 用）：脚本一律用 `py` 启动器跑（Windows 上 `python` 常被 WindowsApps 桩占用）。卡片正文用 `<font color>` 上色，Windows 下 Python 调 `lark-cli.CMD` 时 `<>` 会被 cmd 当重定向符——脚本已自动改用 `node` 直跑 lark-cli 的 JS 绕过，无需你操心。
 - **三个环境变量**（`waga-setup.md` 会帮你写好）：
 
 | 变量 | 含义（大白话） |
@@ -154,15 +158,14 @@ chmod +x waga-reply.sh waga-react.sh
 
 最常用：想找 `c` 长聊 → 发 `c：` → 之后随便说啥都到 c → 发 `main：` 切回去。
 
-### 气泡 reaction 与情绪呼应
+### 气泡 reaction：两层设计
 
-- **自动状态标记**：消息被路由到某会话，瞬间贴 `OnIt`(处理中) + `Typing`(打字)，纯状态。
-- **情绪呼应**：会话读完消息后**判断你的情绪并呼应**——你开心它庆祝、你愤怒它致歉、你沮丧它安慰，不是随便贴。
-- **完成收尾**：回完信把状态标记换成 `DONE`(绿勾)，情绪表情保留当氛围。
+- **状态层**：`Typing`(处理中) → 回完换 `DONE`(绿勾)。固定的，纯状态显示，远程可见「在处理/已处理」。
+- **情绪层（核心）**：会话**读完消息、判断你当下情绪后亲贴一组（常 2-4 个）真实表情**——你开心它庆祝、你愤怒它致歉、你沮丧它安慰。**绝不随机、绝不只贴一个、每次都不同**（随机/复读=糊弄，不是「活」）。
 
 ```bash
-bash "$WAGA_DIR/waga-react.sh" vibe <mid> "LAUGH JOYFUL Fire CLAP"   # 按情绪贴一串
-bash "$WAGA_DIR/waga-react.sh" done <mid>                            # 收尾换绿勾
+bash "$WAGA_DIR/waga-react.sh" vibe <mid> "JOYFUL Fire CLAP"   # 情绪层：按内容现挑一组
+bash "$WAGA_DIR/waga-react.sh" done <mid>                      # 状态层：Typing 换 DONE
 ```
 
 > ⚠ 飞书 `emoji_type` **大小写敏感、是 key 的一部分**：`Fire` 有效、`FIRE` 报 `231001`。连发太快也会 231001（helper 自带限速）。一条消息上限约 10 个。可用调色板见 `waga-react.sh` 头注释；负面/共情表情飞书放行得少（基本 `Sigh`/`Salute`），方向对齐比数量重要。
@@ -355,9 +358,11 @@ A: 不会。所有账号标识走环境变量，仓库零硬编码。
 |---|---|
 | `waga-setup.md` | 一键 onboarding 剧本：让 Claude Code 帮你检测/装 lark-cli、引导授权、抓 ID、写配置（`/waga-setup`） |
 | `waga-on.md` | skill 本体：`/waga-on` 说明 + 挂载用的 Monitor 脚本 |
-| `waga-reply.sh` | 回信 helper |
+| `waga-reply.sh` | 回信 helper（走内联蓝字卡片，自动登记卡片 mid 供引用回复路由） |
 | `waga-react.sh` | 气泡表情 helper：`add` / `done` / `clear` / `vibe` |
-| `waga-spawn.sh` | 远程 spawn 一个 headless waga worker（无需开窗口的新 Claude 会话） |
+| `waga-card.py` | 卡片 helper：`say`(蓝字消息卡) / `start`+`step`+`done`(步进进度卡) / `online`(上线卡)。需 Python 3，用 `py` 启动 |
+| `waga-stream.py` | 流式卡片引擎：包 `claude -p --output-format stream-json` 跑，把过程实时刷到一张卡（spawn worker 用）。被 `waga-card.py` 复用渲染 |
+| `waga-spawn.sh` | 远程 spawn 一个 headless waga worker（无需开窗口的新 Claude 会话），输出走流式卡片 |
 | `rebrand.sh` | 一键换皮改名 |
 
 ## License
