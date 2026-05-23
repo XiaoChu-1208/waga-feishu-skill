@@ -155,7 +155,7 @@ while true; do
 
   # 内容里的换行压成空格，避免多行消息被拆成多条幻影记录
   out=$(lark-cli im +chat-messages-list --chat-id "$CHAT" --as bot \
-    --jq '.data.messages[] | select(.sender.sender_type=="user") | .message_id + "\t" + .create_time + "\t" + (.reply_to // "") + "\t" + ((.content // "")|tostring|gsub("\n";" "))' 2>&1)
+    --jq '.data.messages[] | select(.sender.sender_type=="user") | .message_id + "\t" + .create_time + "\t" + (.reply_to // "-") + "\t" + ((.content // "")|tostring|gsub("\n";" "))' 2>&1)
 
   # 错误识别：token 失效 + API 报错(ok:false/5xx/api_error)。命中就跳过本轮，绝不把报错 JSON 当消息解析
   if echo "$out" | grep -qiE 'secret invalid|token.*expired|invalid_token|99991|10014|"ok" *: *false|api_error|HTTP [45][0-9][0-9]|internal error'; then
@@ -171,7 +171,7 @@ while true; do
 
     # 引用回复路由（优先级最高）：用户引用了某张已登记的卡片
     #   → 我发的卡：路由到我 + 切粘性；别人发的卡：跳过留给那个 session。
-    if [ -n "$replyto" ] && [ "$replyto" != "null" ] && grep -qF "${replyto}|" "$SENTFILE"; then
+    if [ "$replyto" != "-" ] && [ "$replyto" != "null" ] && grep -qF "${replyto}|" "$SENTFILE"; then
       if grep -qxF "${replyto}|${NAME}" "$SENTFILE"; then
         echo "$mid" >> "$SEEN"
         echo "$NAME" > "$STICKY"
@@ -199,8 +199,9 @@ while true; do
         # 冒号后只有空白 → 切粘性
         echo "$mid" >> "$SEEN"
         echo "$NAME" > "$STICKY"
-        lark-cli im +messages-send --as bot --user-id "$USER" \
-          --text "[${NAME}] 已切粘性到我 · 无前缀消息默认到 [${NAME}]" >/dev/null 2>&1
+        py "$WAGA_DIR/waga-card.py" say "$NAME" "已切粘性到我 · 无前缀消息默认到我" >/dev/null 2>&1 \
+          || lark-cli im +messages-send --as bot --user-id "$USER" \
+               --text "[${NAME}] 已切粘性到我 · 无前缀消息默认到 [${NAME}]" >/dev/null 2>&1
         continue
         ;;
       "${NAME}: "*)

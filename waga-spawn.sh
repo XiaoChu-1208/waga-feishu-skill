@@ -35,12 +35,13 @@ STICKY="/tmp/waga_sticky.txt"
 ALIVE="/tmp/waga_alive_${NAME}.txt"
 SIDFILE="/tmp/waga_session_${NAME}.txt"
 LOGF="/tmp/waga_stream_${NAME}.log"
+SENTFILE="/tmp/waga_sent.txt"   # 已发卡片登记（mid|name），引用回复(reply_to)路由用
 # 流式卡片引擎（借鉴 feishu-claude-code-bridge 的单卡片实时刷新体验）
 STREAM="$(dirname "$0")/waga-stream.py"
 CARD="$(dirname "$0")/waga-card.py"
 # ⚠ Git Bash 里 `python` 是 WindowsApps 坏桩（exit 49 吞输出），一律用 `py` 启动器
 PY="py"
-touch "$SEEN"
+touch "$SEEN" "$SENTFILE"
 [ -f "$STICKY" ] || echo "main" > "$STICKY"
 
 # 固定 session-id（保持上下文；重启可续）
@@ -60,6 +61,7 @@ fi
 react() { lark-cli im reactions create --as bot --params "{\"message_id\":\"$1\"}" \
   --data "{\"reaction_type\":{\"emoji_type\":\"$2\"}}" >/dev/null 2>&1; }
 send() { lark-cli im +messages-send --as bot --user-id "$USER" --text "[${NAME}] $1" >/dev/null 2>&1; }
+sendcard() { $PY "$CARD" say "$NAME" "$1" >/dev/null 2>&1 || send "$1"; }  # 内联卡片，失败降级纯文本
 unreact() {  # 删掉触发消息上的某个表情（用完 OnIt 换 DONE）
   [ -z "$1" ] && return
   lark-cli im reactions list --as bot --params "{\"message_id\":\"$1\"}" \
@@ -76,12 +78,18 @@ handle() {
   [ -n "$mid" ] && react "$mid" OnIt
   # esc 标志：看门狗一旦贴过任何超时表情就 touch 它，父进程据此判断"卡过一阵又回来了"
   local esc="/tmp/waga_esc_${NAME}.flag"; rm -f "$esc"
+  # done 标志：任务收尾即 touch；看门狗每轮先检查，杜绝 done 后还刷晕/骷髅
+  local donef="/tmp/waga_done_${NAME}.flag"; rm -f "$donef"
+  local me=$$   # 父 worker PID，看门狗据此判断自己是否被孤儿化（worker 被重启/杀掉）
 
   local wd_pid=""
   if [ -n "$mid" ]; then
     ( start=$(date +%s); lv=0
       while :; do
         sleep 20
+        # 两道保险：任务已收尾，或父 worker 没了 → 立刻收手（kill 没打中也不会 done 后乱刷）
+        [ -f "$donef" ] && break
+        kill -0 "$me" 2>/dev/null || break
         age=$(( $(date +%s) - start ))
         if   [ "$age" -ge 480 ] && [ "$lv" -lt 8 ]; then react "$mid" CrossMark; lv=8
         elif [ "$age" -ge 300 ] && [ "$lv" -lt 5 ]; then react "$mid" SKULL;     lv=5
@@ -100,9 +108,10 @@ handle() {
   # claude 若 529/报错：waga-stream 把卡片刷成红色 + 错误原文（已加 stderr drain + 800 字），不会静默
   $PY "$STREAM" --name "$NAME" --cwd "$WORKDIR" --sid "$SID" $firstflag \
      --user "$USER" "$body" >/dev/null 2>>"$LOGF" \
-     || send "stream worker 异常，详见 $LOGF"
+     || sendcard "stream worker 异常，详见 $LOGF"
 
-  # 停掉看门狗，收尾
+  # 停掉看门狗，收尾：先立 done 标记再 kill —— kill 没打中时看门狗也会在 20s 内自杀
+  : > "$donef"
   [ -n "$wd_pid" ] && kill "$wd_pid" 2>/dev/null
   if [ -n "$mid" ]; then
     unreact "$mid" OnIt
@@ -112,7 +121,7 @@ handle() {
       react "$mid" StatusFlashOfInspiration; react "$mid" STRIVE
     fi
     react "$mid" DONE
-    rm -f "$esc"
+    rm -f "$esc" "$donef"
   fi
 }
 
@@ -122,17 +131,17 @@ dispatch() {
   local mid="$1" body="$2"
   case "$body" in
     "/stop"|"/stop "*)
-      send "收到，headless worker 下线"; rm -f "$ALIVE"; exit 0 ;;
+      sendcard "收到，headless worker 下线（/stop）"; rm -f "$ALIVE"; exit 0 ;;
     "/status"|"/status "*)
-      send "状态 · cwd=${WORKDIR} · session=${SID:0:8}… · 粘性目标=$(cat "$STICKY" 2>/dev/null)"
+      sendcard "状态 · cwd=${WORKDIR} · session=${SID:0:8}… · 粘性目标=$(cat "$STICKY" 2>/dev/null)"
       [ -n "$mid" ] && react "$mid" DONE ;;
     "/cd "*)
       local np="${body#/cd }"; np="${np/#\~/$HOME}"
       if [ -d "$np" ]; then
         WORKDIR="$np"; SID="$(new_sid)"; echo "$SID" > "$SIDFILE"; STARTED=0
-        send "已切到 ${WORKDIR}（已新建 session）"
+        sendcard "已切到 ${WORKDIR}（已新建 session）"
       else
-        send "目录不存在：${np}"
+        sendcard "目录不存在：${np}"
       fi
       [ -n "$mid" ] && react "$mid" DONE ;;
     *)
@@ -157,11 +166,11 @@ rm -f "$STOPFILE"
 
 while true; do
   # 本地关闭：touch 这个文件即可让 worker 优雅退出
-  if [ -f "$STOPFILE" ]; then send "headless worker 下线（stopfile）"; rm -f "$STOPFILE" "$ALIVE"; exit 0; fi
+  if [ -f "$STOPFILE" ]; then sendcard "headless worker 下线（stopfile）"; rm -f "$STOPFILE" "$ALIVE"; exit 0; fi
   # 心跳 epoch|name|cwd|type；type=headless：这是「无窗口的 worker」（spawn 的 headless 会话）
   echo "$(date +%s)|${NAME}|${WORKDIR}|headless" > "$ALIVE"
   out=$(lark-cli im +chat-messages-list --chat-id "$CHAT" --as bot \
-    --jq '.data.messages[] | select(.sender.sender_type=="user") | .message_id + "\t" + ((.content // "")|tostring|gsub("\n";" "))' 2>&1)
+    --jq '.data.messages[] | select(.sender.sender_type=="user") | .message_id + "\t" + (.reply_to // "-") + "\t" + ((.content // "")|tostring|gsub("\n";" "))' 2>&1)
 
   # API 报错(token失效/ok:false/5xx)就跳过本轮，绝不把报错 JSON 当消息
   if echo "$out" | grep -qiE 'secret invalid|token.*expired|invalid_token|99991|10014|"ok" *: *false|api_error|HTTP [45][0-9][0-9]|internal error'; then
@@ -169,10 +178,18 @@ while true; do
   fi
 
   # 用 here-string 跑主循环，避免 pipe 子shell 吃掉 exit
-  while IFS=$'\t' read -r mid content; do
+  while IFS=$'\t' read -r mid replyto content; do
     [ -z "$mid" ] && continue
     case "$mid" in om_*) ;; *) continue ;; esac   # 只处理真消息 id
     grep -qF "$mid" "$SEEN" && continue
+    # 引用回复路由（最高优先级，与 waga-on.md 一致）：用户引用了某张已登记的卡片
+    #   → 我发的卡：路由到我 + 切粘性；别人发的卡：跳过留给那个 worker。
+    if [ "$replyto" != "-" ] && [ "$replyto" != "null" ] && grep -qF "${replyto}|" "$SENTFILE"; then
+      if grep -qxF "${replyto}|${NAME}" "$SENTFILE"; then
+        echo "$mid" >> "$SEEN"; echo "$NAME" > "$STICKY"; dispatch "$mid" "$content"
+      fi
+      continue
+    fi
     # 路由规则（与 waga-on.md 一致）：
     #   冒号语法 name: / name:内容  → 切粘性到我 + 处理（新规则：带内容也切粘性）
     #   方括号 [name] 内容          → 纯一次性，不动粘性
@@ -180,7 +197,7 @@ while true; do
     case "$content" in
       "${NAME}:"|"${NAME}："|"${NAME}: "|"${NAME}： ")
         # 冒号后只有空白 → 只切粘性，不跑
-        echo "$mid" >> "$SEEN"; echo "$NAME" > "$STICKY"; send "已切粘性到我"; continue ;;
+        echo "$mid" >> "$SEEN"; echo "$NAME" > "$STICKY"; sendcard "已切粘性到我 · 无前缀消息默认到我"; continue ;;
       "${NAME}:"*|"${NAME}："*)
         # 冒号带内容 → 切粘性 + 处理
         echo "$mid" >> "$SEEN"; echo "$NAME" > "$STICKY"
