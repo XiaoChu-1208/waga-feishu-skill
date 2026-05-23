@@ -229,9 +229,22 @@ def run(name, cwd, sid, first, user_oid, message):
     except Exception as e:
         state, err_msg = "error", f"无法启动 claude: {e}"
         if mid:
-            card_patch(mid, build_card(name, "error", "", [], err_msg, 0))
+            card_patch(mid, build_card(name, "error", f"**⚠ 失败原因**\n{err_msg}", [], err_msg, 0))
         print(err_msg)
         return 1
+
+    # ⚠ stderr 必须在跑的同时排空：否则 claude 往 stderr 写满管道缓冲(~64KB)会阻塞，
+    #   整个 headless worker 静默挂死（正是要消灭的"卡住不报错"）。后台线程持续 drain。
+    stderr_lines = []
+
+    def drain_err():
+        try:
+            for ln in proc.stderr:
+                stderr_lines.append(ln)
+        except Exception:
+            pass
+
+    threading.Thread(target=drain_err, daemon=True).start()
 
     # reaction 即动作：后台线程轮询这张卡，用户贴 No → 杀 claude（终止任务）
     watch = {"interrupted": False, "done": False}
@@ -289,7 +302,7 @@ def run(name, cwd, sid, first, user_oid, message):
             result_text = ev.get("result", "") or ""
             if ev.get("is_error"):
                 state = "error"
-                err_msg = result_text[:200] or "未知错误"
+                err_msg = result_text[:800] or "未知错误"
             else:
                 state = "done"
             if not body_text.strip() and result_text.strip():
@@ -299,14 +312,25 @@ def run(name, cwd, sid, first, user_oid, message):
     watch["done"] = True
     for t in tools:
         t["running"] = False
+    time.sleep(0.1)  # 让 drain 线程收尾
+    stderr_tail = "".join(stderr_lines)[-800:].strip()
     if watch["interrupted"]:
         state = "interrupted"
     elif proc.returncode not in (0, None) and state != "error":
         state = "error"
-        err_msg = (proc.stderr.read() or "")[:200] if proc.stderr else f"exit {proc.returncode}"
+        err_msg = stderr_tail or f"claude 退出码 {proc.returncode}"
+    elif state == "error" and stderr_tail and stderr_tail not in err_msg:
+        # 已是 error 但 stderr 有更具体内容 → 补上，让"什么原因"看得全
+        err_msg = (err_msg + "\n" + stderr_tail)[:800]
+
+    # 失败时把原因塞进卡片正文（大字可读），而不是只压在末尾小字状态行——
+    # 用户明确要求"得知道到底什么原因"。
+    final_body = body_text
+    if state == "error" and err_msg:
+        final_body = (body_text + "\n\n**⚠ 失败原因**\n" + err_msg).strip()
 
     if mid:
-        card_patch(mid, build_card(name, state, body_text,
+        card_patch(mid, build_card(name, state, final_body,
                                    tools, err_msg if state == "error" else "",
                                    time.time() - started))
     # 给 spawn 循环回最终文本

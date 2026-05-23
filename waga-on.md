@@ -78,7 +78,8 @@ SEEN="/tmp/waga_seen_${NAME}.txt"
 STICKY="/tmp/waga_sticky.txt"
 ALIVE="/tmp/waga_alive_${NAME}.txt"
 SENTFILE="/tmp/waga_sent.txt"   # 已发卡片登记（mid|name），引用回复路由用
-touch "$SEEN" "$SENTFILE"
+PEND="/tmp/waga_pending_${NAME}.txt"   # 看门狗待办：已 emit 未完成的消息（mid|emit_epoch|level）
+touch "$SEEN" "$SENTFILE" "$PEND"
 [ -f "$STICKY" ] || echo "main" > "$STICKY"
 
 # 路由到我时：瞬间贴一个中性「处理中」标记 OnIt（只一个，不再叠 Typing），再 emit。
@@ -93,8 +94,41 @@ emit() {
   # emit 只贴状态层的 Typing；反应层由我补。
   lark-cli im reactions create --as bot --params "{\"message_id\":\"$m\"}" \
     --data "{\"reaction_type\":{\"emoji_type\":\"Typing\"}}" >/dev/null 2>&1
+  # 登记到看门狗待办：若我（窗口里的 Claude）卡住没回，monitor 会按超时升级贴表情
+  echo "${m}|$(date +%s)|0" >> "$PEND"
   echo "[WAGA-MSG] $ct [mid=$m] :: $body"
-  echo "[WAGA-REMINDER] 必做①先读懂这条再贴【一组(2-4个)真实贴合心情的情绪表情,每次不同,绝不随机/绝不只一个】: bash \"$WAGA_DIR/waga-react.sh\" vibe $m \"E1 E2 E3\"  ②回完把状态 Typing 换 DONE: bash \"$WAGA_DIR/waga-react.sh\" done $m  ③干活任务先 announce: py \"$WAGA_DIR/waga-card.py\" start $NAME \"收到,开始干X\" 再 step 再 done  ④回复: bash \"$WAGA_DIR/waga-reply.sh\" $NAME \"...\""
+  echo "[WAGA-REMINDER] 必做①先读懂这条再贴【一组(2-4个)真实贴合心情的情绪表情,每次不同,绝不随机/绝不只一个】: bash \"$WAGA_DIR/waga-react.sh\" vibe $m \"E1 E2 E3\"  ②回完把状态换 DONE: bash \"$WAGA_DIR/waga-react.sh\" done $m  ③干活任务先 announce: py \"$WAGA_DIR/waga-card.py\" start $NAME \"收到,开始干X\" 再 step 再 done  ④回复: bash \"$WAGA_DIR/waga-reply.sh\" $NAME \"...\"  ★若这条气泡上已有 衰/晕/骷髅/叉(说明我卡了很久才醒)：第一件事先 bash \"$WAGA_DIR/waga-react.sh\" woke $m （撤超时表情+贴灵光一现/举手），再优先处理这条，最后 done"
+}
+
+# ── 看门狗：monitor 一直活着，即便窗口里的 Claude 卡死也能贴超时表情，让飞书侧立刻看到"它卡了" ──
+# 升级阶梯：2min 衰(TOASTED) → 3min 晕(DIZZY) → 5min 骷髅(SKULL) → 8min 叉(CrossMark,彻底超时)
+# 出列条件：消息上出现 DONE(完成) → 删行；出现 StatusFlashOfInspiration(agent 醒了) → 冻结升级保留到 DONE
+WD_react() { lark-cli im reactions create --as bot --params "{\"message_id\":\"$1\"}" \
+  --data "{\"reaction_type\":{\"emoji_type\":\"$2\"}}" >/dev/null 2>&1; }
+watchdog() {
+  [ -s "$PEND" ] || return
+  local now tmp pmid pep plv age nl rl
+  now=$(date +%s); tmp="${PEND}.tmp"; : > "$tmp"
+  while IFS='|' read -r pmid pep plv; do
+    [ -z "$pmid" ] && continue
+    [ -z "$plv" ] && plv=0
+    rl=$(lark-cli im reactions list --as bot --params "{\"message_id\":\"$pmid\"}" \
+         --jq '.data.items[].reaction_type.emoji_type' 2>/dev/null)
+    # ⚠ lark-cli --jq 输出不带引号（DONE 而非 "DONE"），用无引号子串匹配；emoji key 互不为子串，安全
+    case "$rl" in *DONE*) continue ;; esac                           # 已完成 → 出列
+    case "$rl" in *StatusFlashOfInspiration*)                        # agent 已醒 → 冻结，留到 DONE
+      echo "${pmid}|${pep}|9" >> "$tmp"; continue ;; esac
+    age=$((now - pep))
+    [ "$age" -gt 3600 ] && continue                                  # 超 1 小时仍未完成 → 弃，防 PEND 无限长
+    nl="$plv"
+    if   [ "$age" -ge 480 ] && [ "$plv" -lt 8 ]; then WD_react "$pmid" CrossMark; nl=8
+    elif [ "$age" -ge 300 ] && [ "$plv" -lt 5 ]; then WD_react "$pmid" SKULL;     nl=5
+    elif [ "$age" -ge 180 ] && [ "$plv" -lt 3 ]; then WD_react "$pmid" DIZZY;     nl=3
+    elif [ "$age" -ge 120 ] && [ "$plv" -lt 2 ]; then WD_react "$pmid" TOASTED;   nl=2
+    fi
+    echo "${pmid}|${pep}|${nl}" >> "$tmp"
+  done < "$PEND"
+  mv "$tmp" "$PEND"
 }
 
 # seed
@@ -115,6 +149,9 @@ while true; do
   # 心跳：每轮写 epoch|name|cwd|type，/who 据此判断谁活着 + 区分有窗口/无窗口
   # type=windowed：这是「有窗口的 worker」（开着的 Claude Code 窗口 + /waga-on 监听器）
   echo "$(date +%s)|${NAME}|${CWD}|windowed" > "$ALIVE"
+
+  # 看门狗先跑：给"已 emit 未完成"的消息按超时升级贴表情（在处理新消息前，确保顺序无竞态）
+  watchdog
 
   # 内容里的换行压成空格，避免多行消息被拆成多条幻影记录
   out=$(lark-cli im +chat-messages-list --chat-id "$CHAT" --as bot \
@@ -316,5 +353,7 @@ lark-cli im +messages-send --as bot \
   - **流式卡片**（2026-05-22 借鉴 `feishu-claude-code-bridge` 加）：worker 处理每条消息时不再发一串离散文本，而是发**一张飞书交互卡片并随 claude 输出实时 patch**（运行中=蓝 / 完成=绿 / 失败=红，显示正文+工具调用），引擎是 `waga-stream.py`（必须用 `py` 启动器跑，`python` 在 Git Bash 是坏桩）。
   - worker 命令：`<名字>: /stop` 关闭、`<名字>: /status` 看 cwd/session、`<名字>: /cd <路径>` 切目录（会新建 session）。
   - ⚠ 卡片**不放可点按钮**：按钮点击要事件回调服务器，waga 是轮询架构收不到回调，所以停止用文字 `/stop`。
+- **`/doctor` 自检**（2026-05-23 借鉴 bridge 加）：用户发 `/doctor`（无前缀走粘性，或 `name: /doctor`），我收到后**跑 `bash "$WAGA_DIR/waga-doctor.sh"`、读它的输出、判断哪儿出毛病、回一张诊断卡**。脚本只收集（lark-cli 连通/token、粘性目标是否指向死 worker、各 worker 心跳 live/dead/类型、worker 日志末尾、bash 进程数），**判断和回报由我做**。最常抓到的坑：粘性指向已 dead 的 worker → 无前缀消息被静默丢弃。
+- **统一概念**：monitor 和 spawn worker **本质都是 worker**，只分【有窗口 windowed】(`/waga-on` 挂的开着的窗口) vs【无窗口 headless】(spawn 的)。`/who` 卡片按这个标。"monitor" 只是有窗口 worker 身上的信使叫法。
 - token 过期时（一般每 ~7 天）监听器会喷 `[WAGA-ERR]`，让用户跑 `lark-cli auth login --domain all` 重新扫码
 - 一个 session 一个 NAME；如果用户在两个窗口跑了同 name 的 waga-on，他们都会响应同前缀消息（不致命但容易让用户糊涂），通过上线回执用户能立刻发现重名

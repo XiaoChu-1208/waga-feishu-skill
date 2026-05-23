@@ -90,27 +90,39 @@ def cmd_say(name, text):
     return 0
 
 
-def build_online_card(name, cwd, sticky):
-    """上线测通卡片（用户 2026-05-22 要求做个精致的）：内联蓝 name + 上线信息 + 用法。"""
-    body = (
+def build_online_card(name, cwd, sticky, kind="windowed"):
+    """上线测通卡片（用户 2026-05-22 要求做个精致的）：内联蓝 name + 上线信息 + 用法。
+    kind=windowed（/waga-on 开窗口）/ headless（spawn 无窗口）——用法区不同。"""
+    head = (
         f"{WS.name_line(name)}　<font color='green'>已上线 · 测通</font>\n\n"
         f"**目录** `{cwd}`\n"
         f"**当前粘性目标** `{sticky}`\n\n"
-        f"**触达我**\n"
-        f"`{name}: 内容`　处理 + 切粘性到我\n"
-        f"`{name}:`　　　只切粘性（无前缀消息默认到我）\n"
-        f"`[{name}] 内容`　纯一次性（不改粘性）\n"
-        f"`/who`　　　看谁在线"
     )
+    if kind == "headless":
+        cmds = (
+            f"**派活/操作**（headless · 免值守）\n"
+            f"`{name}: 任务`　处理 + 切粘性到我（结果走流式卡片）\n"
+            f"`{name}:`　　　只切粘性\n"
+            f"`[{name}] 任务`　纯一次性（不改粘性）\n"
+            f"`{name}: /cd <路径>` 切目录　`{name}: /status` 状态　`{name}: /stop` 关闭"
+        )
+    else:
+        cmds = (
+            f"**触达我**\n"
+            f"`{name}: 内容`　处理 + 切粘性到我\n"
+            f"`{name}:`　　　只切粘性（无前缀消息默认到我）\n"
+            f"`[{name}] 内容`　纯一次性（不改粘性）\n"
+            f"`/who`　　　看谁在线"
+        )
     return {
         "schema": "2.0",
         "config": {"summary": {"content": f"{name} 已上线"}},
-        "body": {"elements": [{"tag": "markdown", "content": body}]},
+        "body": {"elements": [{"tag": "markdown", "content": head + cmds}]},
     }
 
 
-def cmd_online(name, cwd, sticky):
-    mid = WS.card_send(USER_OID, build_online_card(name, cwd, sticky))
+def cmd_online(name, cwd, sticky, kind="windowed"):
+    mid = WS.card_send(USER_OID, build_online_card(name, cwd, sticky, kind))
     if not mid:
         sys.stderr.write("[waga-card] online: card_send 失败\n")
         return 1
@@ -237,13 +249,13 @@ def main():
     p = sub.add_parser("done"); p.add_argument("name"); p.add_argument("text", nargs="?", default="")
     p = sub.add_parser("error"); p.add_argument("name"); p.add_argument("text", nargs="?", default="")
     p = sub.add_parser("say"); p.add_argument("name"); p.add_argument("text", nargs="?", default="")
-    p = sub.add_parser("online"); p.add_argument("name"); p.add_argument("cwd"); p.add_argument("sticky", nargs="?", default="main")
+    p = sub.add_parser("online"); p.add_argument("name"); p.add_argument("cwd"); p.add_argument("sticky", nargs="?", default="main"); p.add_argument("kind", nargs="?", default="windowed")
     p = sub.add_parser("who")
     a = ap.parse_args()
     if a.cmd == "say":
         sys.exit(cmd_say(a.name, a.text))
     elif a.cmd == "online":
-        sys.exit(cmd_online(a.name, a.cwd, a.sticky))
+        sys.exit(cmd_online(a.name, a.cwd, a.sticky, a.kind))
     elif a.cmd == "who":
         sys.exit(cmd_who())
     elif a.cmd == "start":

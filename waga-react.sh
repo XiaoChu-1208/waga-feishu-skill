@@ -3,9 +3,14 @@
 #
 # 用法：
 #   bash waga-react.sh add  <message_id> <emoji_type>      # 加一个表情（默认 OnIt）
-#   bash waga-react.sh done <message_id>                   # 把本 bot 的 OnIt 换成 DONE(绿勾)
+#   bash waga-react.sh done <message_id>                   # 清掉所有临时标记(处理中/超时/醒来)换成 DONE(绿勾)
+#   bash waga-react.sh woke <message_id>                   # agent 醒来：撤超时表情，贴 灵光一现+举手(看到了,马上处理)
 #   bash waga-react.sh clear <message_id> <emoji_type>     # 删掉本 bot 该 emoji 的 reaction
 #   bash waga-react.sh vibe <message_id> "E1 E2 E3 ..."    # 一次贴一串表情（生动模式，≤10个，自动限速）
+#
+# 超时升级表情（由 monitor 看门狗在 agent 没回时自动贴；agent 醒来用 woke 撤掉）：
+#   TOASTED(衰,2min) DIZZY(晕,3min) SKULL(骷髅,5min) CrossMark(叉号,8min彻底超时)
+#   醒来标记：StatusFlashOfInspiration(灵光一现) STRIVE(举手)
 #
 # ⚠ emoji_type 大小写敏感，是 key 的一部分。FIRE 无效、Fire 才对。
 #    不在下表的别乱试——错的会返回 231001。WebFetch 文档那个小模型会瞎编，别信。
@@ -33,7 +38,7 @@ MID="${2:-}"
 EMOJI="${3:-OnIt}"
 
 if [ -z "$MODE" ] || [ -z "$MID" ]; then
-  echo "usage: $0 add|done|clear <message_id> [emoji_type]" >&2
+  echo "usage: $0 add|done|woke|clear|vibe <message_id> [emoji_type]" >&2
   exit 2
 fi
 
@@ -77,10 +82,20 @@ case "$MODE" in
     react_clear "$MID" "$EMOJI"
     echo "cleared $EMOJI on $MID"
     ;;
+  woke)
+    # agent 卡了很久终于醒来：先撤掉看门狗贴的超时升级表情，
+    # 立刻贴 灵光一现 + 举手，向用户表示"我看到了、这就优先处理"
+    for x in TOASTED DIZZY SKULL CrossMark; do react_clear "$MID" "$x"; done
+    a=$(react_add "$MID" "StatusFlashOfInspiration")
+    b=$(react_add "$MID" "STRIVE")
+    echo "woke -> 灵光一现:${a:-ERR} 举手:${b:-ERR}"
+    ;;
   done)
-    # 清掉临时「处理中」标记（OnIt + Typing），换成 DONE 绿勾；情绪表情保留当氛围
-    react_clear "$MID" "OnIt"
-    react_clear "$MID" "Typing"
+    # 清掉所有临时标记（处理中 OnIt/Typing + 超时升级 + 醒来标记），换成 DONE 绿勾；
+    # 情绪表情（vibe 贴的）保留当氛围
+    for x in OnIt Typing TOASTED DIZZY SKULL CrossMark StatusFlashOfInspiration STRIVE; do
+      react_clear "$MID" "$x"
+    done
     rid=$(react_add "$MID" "DONE")
     echo "done(DONE) -> ${rid:-ERR}"
     ;;

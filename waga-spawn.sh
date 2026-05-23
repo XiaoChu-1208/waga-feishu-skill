@@ -37,6 +37,7 @@ SIDFILE="/tmp/waga_session_${NAME}.txt"
 LOGF="/tmp/waga_stream_${NAME}.log"
 # 流式卡片引擎（借鉴 feishu-claude-code-bridge 的单卡片实时刷新体验）
 STREAM="$(dirname "$0")/waga-stream.py"
+CARD="$(dirname "$0")/waga-card.py"
 # ⚠ Git Bash 里 `python` 是 WindowsApps 坏桩（exit 49 吞输出），一律用 `py` 启动器
 PY="py"
 touch "$SEEN"
@@ -67,17 +68,52 @@ unreact() {  # 删掉触发消息上的某个表情（用完 OnIt 换 DONE）
     --params "{\"message_id\":\"$1\",\"reaction_id\":\"$r\"}" >/dev/null 2>&1; done
 }
 
-# 处理一条消息：贴 OnIt → 跑流式卡片 worker（自己发卡+实时 patch）→ 换 DONE
+# 处理一条消息：贴 OnIt → （后台超时升级看门狗）→ 跑流式卡片 worker → 清表情换 DONE
+# 超时升级看门狗：claude 跑得久就在用户消息上贴 衰→晕→骷髅→叉，让飞书侧更生动地看到"在转、转了多久"。
+# 与窗口版 waga-on.md 的阶梯一致（2/3/5/8 分钟）。headless 不会"睡着"，所以没有 woke/灵光一现那步。
 handle() {
   local mid="$1" body="$2"
   [ -n "$mid" ] && react "$mid" OnIt
+  # esc 标志：看门狗一旦贴过任何超时表情就 touch 它，父进程据此判断"卡过一阵又回来了"
+  local esc="/tmp/waga_esc_${NAME}.flag"; rm -f "$esc"
+
+  local wd_pid=""
+  if [ -n "$mid" ]; then
+    ( start=$(date +%s); lv=0
+      while :; do
+        sleep 20
+        age=$(( $(date +%s) - start ))
+        if   [ "$age" -ge 480 ] && [ "$lv" -lt 8 ]; then react "$mid" CrossMark; lv=8
+        elif [ "$age" -ge 300 ] && [ "$lv" -lt 5 ]; then react "$mid" SKULL;     lv=5
+        elif [ "$age" -ge 180 ] && [ "$lv" -lt 3 ]; then react "$mid" DIZZY;     lv=3
+        elif [ "$age" -ge 120 ] && [ "$lv" -lt 2 ]; then react "$mid" TOASTED;   lv=2
+        fi
+        [ "$lv" -ge 2 ] && : > "$esc"   # 升过级=卡过，标记之
+        [ "$lv" -ge 8 ] && break        # 已到彻底超时叉号，无更高级，停（也避免被孤儿化后空转）
+      done ) &
+    wd_pid=$!
+  fi
+
   local firstflag=""
   if [ "$STARTED" = "0" ]; then firstflag="--first"; STARTED=1; fi
   # waga-stream.py 自己发卡片到飞书并随 claude 输出实时刷新；stdout 是最终文本（这里丢弃）
+  # claude 若 529/报错：waga-stream 把卡片刷成红色 + 错误原文（已加 stderr drain + 800 字），不会静默
   $PY "$STREAM" --name "$NAME" --cwd "$WORKDIR" --sid "$SID" $firstflag \
      --user "$USER" "$body" >/dev/null 2>>"$LOGF" \
      || send "stream worker 异常，详见 $LOGF"
-  [ -n "$mid" ] && { unreact "$mid" OnIt; react "$mid" DONE; }
+
+  # 停掉看门狗，收尾
+  [ -n "$wd_pid" ] && kill "$wd_pid" 2>/dev/null
+  if [ -n "$mid" ]; then
+    unreact "$mid" OnIt
+    if [ -f "$esc" ]; then
+      # 卡过一阵（含 529 内部重试）才回来 → 撤超时表情，贴 灵光一现+举手 当"满血恢复"信号，再 DONE
+      for x in TOASTED DIZZY SKULL CrossMark; do unreact "$mid" "$x"; done
+      react "$mid" StatusFlashOfInspiration; react "$mid" STRIVE
+    fi
+    react "$mid" DONE
+    rm -f "$esc"
+  fi
 }
 
 # 命令分发：/stop /status /cd 走特殊处理，其余交给 handle 跑流式卡片。
@@ -108,11 +144,10 @@ dispatch() {
 lark-cli im +chat-messages-list --chat-id "$CHAT" --as bot \
   --jq '.data.messages[].message_id' 2>/dev/null | tr -d '"' >> "$SEEN"
 
-send "headless worker 上线 · cwd=${WORKDIR} · session=${SID:0:8}…
-派活：${NAME}: 任务（结果走流式卡片实时刷新）
-切目录：${NAME}: /cd <路径>   看状态：${NAME}: /status
-关闭：${NAME}: /stop
-冒号语法会把粘性目标切到我；[${NAME}] 前缀是纯一次性"
+# 上线回执走内联卡片（与窗口版一致）；卡片失败降级纯文本
+$PY "$CARD" online "$NAME" "$WORKDIR" "$(cat "$STICKY" 2>/dev/null)" headless >/dev/null 2>&1 \
+  || send "headless worker 上线 · cwd=${WORKDIR} · session=${SID:0:8}…
+派活：${NAME}: 任务　切目录：${NAME}: /cd <路径>　状态：${NAME}: /status　关闭：${NAME}: /stop"
 
 # 有初始任务就先干
 [ -n "$INIT_TASK" ] && handle "" "$INIT_TASK"
