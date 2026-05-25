@@ -74,6 +74,8 @@ CWD="$(pwd)"
 CHAT="${WAGA_CHAT_ID:?need WAGA_CHAT_ID, see README}"
 USER="${WAGA_USER_ID:?need WAGA_USER_ID, see README}"
 WAGA_DIR=${WAGA_DIR}
+# Python 启动器：Windows 用 py（Git Bash 里 python 是坏桩），Mac/Linux 用 python3
+PY="$(command -v py 2>/dev/null || command -v python3 2>/dev/null || echo python3)"
 SEEN="/tmp/waga_seen_${NAME}.txt"
 STICKY="/tmp/waga_sticky.txt"
 ALIVE="/tmp/waga_alive_${NAME}.txt"
@@ -97,7 +99,7 @@ emit() {
   # 登记到看门狗待办：若我（窗口里的 Claude）卡住没回，monitor 会按超时升级贴表情
   echo "${m}|$(date +%s)|0" >> "$PEND"
   echo "[WAGA-MSG] $ct [mid=$m] :: $body"
-  echo "[WAGA-REMINDER] 必做①先读懂这条再贴【一组(2-4个)真实贴合心情的情绪表情,每次不同,绝不随机/绝不只一个】: bash \"$WAGA_DIR/waga-react.sh\" vibe $m \"E1 E2 E3\"  ②回完把状态换 DONE: bash \"$WAGA_DIR/waga-react.sh\" done $m  ③干活任务先 announce: py \"$WAGA_DIR/waga-card.py\" start $NAME \"收到,开始干X\" 再 step 再 done  ④回复: bash \"$WAGA_DIR/waga-reply.sh\" $NAME \"...\"  ★若这条气泡上已有 衰/晕/骷髅/叉(说明我卡了很久才醒)：第一件事先 bash \"$WAGA_DIR/waga-react.sh\" woke $m （撤超时表情+贴灵光一现/举手），再优先处理这条，最后 done"
+  echo "[WAGA-REMINDER] 必做①先读懂这条再贴【一组(2-4个)真实贴合心情的情绪表情,每次不同,绝不随机/绝不只一个】: bash \"$WAGA_DIR/waga-react.sh\" vibe $m \"E1 E2 E3\"  ②回完把状态换 DONE: bash \"$WAGA_DIR/waga-react.sh\" done $m  ③干活任务先 announce: $PY \"$WAGA_DIR/waga-card.py\" start $NAME \"收到,开始干X\" 再 step 再 done  ④回复: bash \"$WAGA_DIR/waga-reply.sh\" $NAME \"...\"  ★若这条气泡上已有 衰/晕/骷髅/叉(说明我卡了很久才醒)：第一件事先 bash \"$WAGA_DIR/waga-react.sh\" woke $m （撤超时表情+贴灵光一现/举手），再优先处理这条，最后 done"
 }
 
 # ── 看门狗：monitor 一直活着，即便窗口里的 Claude 卡死也能贴超时表情，让飞书侧立刻看到"它卡了" ──
@@ -105,6 +107,9 @@ emit() {
 # 出列条件：消息上出现 DONE(完成) → 删行；出现 StatusFlashOfInspiration(agent 醒了) → 冻结升级保留到 DONE
 WD_react() { lark-cli im reactions create --as bot --params "{\"message_id\":\"$1\"}" \
   --data "{\"reaction_type\":{\"emoji_type\":\"$2\"}}" >/dev/null 2>&1; }
+# 封档：成为粘性目标那一刻把当前所有消息标记已读，避免回溯处理"切换前发给上一个目标的无前缀消息"
+reseed() { lark-cli im +chat-messages-list --chat-id "$CHAT" --as bot \
+  --jq '.data.messages[].message_id' 2>/dev/null | tr -d '"' >> "$SEEN"; }
 watchdog() {
   [ -s "$PEND" ] || return
   local now tmp pmid pep plv age nl rl
@@ -137,7 +142,7 @@ lark-cli im +chat-messages-list --chat-id "$CHAT" --as bot \
 
 # 上线回执 — 一张精致内联卡片（waga-card.py online），替代原来两条纯文本
 sticky_now=$(cat "$STICKY" 2>/dev/null)
-reg=$(py "$WAGA_DIR/waga-card.py" online "$NAME" "$CWD" "$sticky_now" 2>&1)
+reg=$($PY "$WAGA_DIR/waga-card.py" online "$NAME" "$CWD" "$sticky_now" 2>&1)
 case "$reg" in
   om_*) echo "[WAGA] online card sent ok ($reg)" ;;
   *)    echo "[WAGA-ERR-REGISTER] online card: $(echo "$reg" | tr '\n' ' ' | cut -c1-200)" ;;
@@ -187,7 +192,7 @@ while true; do
         echo "$mid" >> "$SEEN"
         lockf="/tmp/waga_who_${mid}.lock"
         if ( set -o noclobber; echo "$NAME" > "$lockf" ) 2>/dev/null; then
-          py "$WAGA_DIR/waga-card.py" who >/dev/null 2>&1
+          $PY "$WAGA_DIR/waga-card.py" who >/dev/null 2>&1
         fi
         continue
         ;;
@@ -198,36 +203,36 @@ while true; do
       "${NAME}:"|"${NAME}: "|"${NAME}："|"${NAME}： ")
         # 冒号后只有空白 → 切粘性
         echo "$mid" >> "$SEEN"
-        echo "$NAME" > "$STICKY"
-        py "$WAGA_DIR/waga-card.py" say "$NAME" "已切粘性到我 · 无前缀消息默认到我" >/dev/null 2>&1 \
+        echo "$NAME" > "$STICKY"; reseed
+        $PY "$WAGA_DIR/waga-card.py" say "$NAME" "已切粘性到我 · 此后无前缀消息默认到我（之前的不补读）" >/dev/null 2>&1 \
           || lark-cli im +messages-send --as bot --user-id "$USER" \
                --text "[${NAME}] 已切粘性到我 · 无前缀消息默认到 [${NAME}]" >/dev/null 2>&1
         continue
         ;;
       "${NAME}: "*)
         echo "$mid" >> "$SEEN"
-        echo "$NAME" > "$STICKY"   # 冒号带内容也切粘性
+        echo "$NAME" > "$STICKY"; reseed   # 切粘性 + 封档历史（旧无前缀消息不补读）
         stripped="${content#${NAME}: }"
         emit "$mid" "$ctime" "$stripped"
         continue
         ;;
       "${NAME}:"*)
         echo "$mid" >> "$SEEN"
-        echo "$NAME" > "$STICKY"   # 冒号带内容也切粘性
+        echo "$NAME" > "$STICKY"; reseed   # 切粘性 + 封档历史（旧无前缀消息不补读）
         stripped="${content#${NAME}:}"
         emit "$mid" "$ctime" "$stripped"
         continue
         ;;
       "${NAME}： "*)
         echo "$mid" >> "$SEEN"
-        echo "$NAME" > "$STICKY"   # 冒号带内容也切粘性
+        echo "$NAME" > "$STICKY"; reseed   # 切粘性 + 封档历史（旧无前缀消息不补读）
         stripped="${content#${NAME}： }"
         emit "$mid" "$ctime" "$stripped"
         continue
         ;;
       "${NAME}："*)
         echo "$mid" >> "$SEEN"
-        echo "$NAME" > "$STICKY"   # 冒号带内容也切粘性
+        echo "$NAME" > "$STICKY"; reseed   # 切粘性 + 封档历史（旧无前缀消息不补读）
         stripped="${content#${NAME}：}"
         emit "$mid" "$ctime" "$stripped"
         continue

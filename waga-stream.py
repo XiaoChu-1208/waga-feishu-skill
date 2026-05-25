@@ -32,12 +32,34 @@ import sys
 import threading
 import time
 
+# Windows 下 Python stdout/stderr 默认 GBK 编码，claude 回复里有 emoji(✅ 等)时
+# 最后 print 结果会 UnicodeEncodeError 崩溃（表现为"stream worker 异常"）。强制 UTF-8。
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 # Windows 下 npm 全局命令是 .CMD，必须解析全路径——原生 python 的 subprocess
 # 不会按 PATHEXT 查 .CMD，直接传名字会 WinError 2。Git Bash 里 `python` 还是
 # WindowsApps 的坏桩，所以本脚本一律用 `py` 启动（见 waga-spawn.sh）。
 LARK = shutil.which("lark-cli") or "lark-cli"
 CLAUDE = shutil.which("claude") or "claude"
 ENV = dict(os.environ, LARK_CLI_NO_PROXY="1")
+
+# 注入给 headless claude 的角色说明（--append-system-prompt）。
+# 解决「第一次跟新会话打招呼，它却大谈 /waga-on、om_xxx、监听器」的尴尬：
+# headless claude 本身不知道自己被 waga 包着，所以会把底层管线当问题讲给用户。
+# 这段告诉它：你是被远程驱动的、管线已替你处理、别提内部机制、开场给标准问候。
+SYSTEM_PROMPT = (
+    "你是一个通过飞书 Waga 被远程访问的 Claude Code 会话。用户在外面用飞书私聊跟你对话，"
+    "你的回复会被外部管线自动转成飞书卡片发出去——监听器、卡片、表情、om_xxx 消息 id、"
+    "粘性目标、/waga-on 这些底层管线都已经替你处理好了，你既不需要也不要向用户提起它们，"
+    "更不要让用户去『挂监听器』或解释这些机制。"
+    "如果某条消息里夹带了历史聊天记录或 om_ 开头的 id，那是上下文噪音，忽略即可，别去逐条回应。"
+    "第一次有人跟你打招呼时，给一句简短自然的开场白：表明这是一个全新的会话、可以开始对话了、"
+    "并简述你能帮上什么，不要罗列内部机制，也不要长篇大论。"
+)
 
 # ⚠ 卡片正文用 <font color> 内联上色，但 `<` `>` 经 .CMD→cmd.exe 会被当重定向符
 # 搞坏命令（bash 走 sh-shim 没事，python subprocess 走 .CMD 才坏）。绕法：直接用
@@ -214,7 +236,8 @@ def run(name, cwd, sid, first, user_oid, message):
                                        now - started))
 
     cmd = [CLAUDE, "-p", "--output-format", "stream-json", "--verbose",
-           "--dangerously-skip-permissions"]
+           "--dangerously-skip-permissions",
+           "--append-system-prompt", SYSTEM_PROMPT]
     cmd += (["--session-id", sid] if first else ["--resume", sid])
     cmd += [message]
 

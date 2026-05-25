@@ -9,6 +9,8 @@
 #       粘性是否指向死 worker(今天踩过的坑)、worker 日志末尾、在跑 monitor 进程数。
 
 export LARK_CLI_NO_PROXY=1
+# 本地配置：真实 id 放同目录 .env（已 gitignore，不上传）
+[ -f "$(dirname "$0")/.env" ] && . "$(dirname "$0")/.env"
 CHAT=${WAGA_CHAT_ID:?set WAGA_CHAT_ID}
 STICKY="/tmp/waga_sticky.txt"
 now=$(date +%s)
@@ -76,7 +78,8 @@ fi
 
 echo ""
 echo "--- 6. 在跑的 monitor/worker bash 进程数 ---"
-n=$(ps -W 2>/dev/null | grep -c -iE 'bash')
+# ps -W 是 Git Bash/MSYS 专属（列 Windows 进程）；Mac/Linux 用 ps ax 兜底
+n=$( { ps -W 2>/dev/null || ps ax 2>/dev/null; } | grep -c -iE 'bash')
 echo "  bash 进程总数 ≈ $n（含非 waga 的；同名重复挂会导致双重处理/抢答）"
 
 echo ""

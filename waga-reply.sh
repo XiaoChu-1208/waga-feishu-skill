@@ -22,11 +22,15 @@ shift
 TEXT="$*"
 
 export LARK_CLI_NO_PROXY=1
+# 本地配置：真实 id 放同目录 .env（已 gitignore，不上传）；供 waga-card.py 读 WAGA_USER_ID
+[ -f "$(dirname "$0")/.env" ] && . "$(dirname "$0")/.env"
 
 # 2026-05-22 起：回复走内联蓝字卡片（waga-card.py say），不再发 [name] 纯文本。
-# say 会自动登记卡片 mid 到 waga_sent.txt（供引用回复路由）。统一用 py 启动器。
+# say 会自动登记卡片 mid 到 waga_sent.txt（供引用回复路由）。
+# 启动器：Windows 用 py（python 是坏桩），Mac/Linux 用 python3——按序探测。
 DIR="$(dirname "$0")"
-mid=$(py "$DIR/waga-card.py" say "$NAME" "$TEXT" 2>/dev/null | tr -d '\r\n')
+PY="$(command -v py 2>/dev/null || command -v python3 2>/dev/null || echo python3)"
+mid=$($PY "$DIR/waga-card.py" say "$NAME" "$TEXT" 2>/dev/null | tr -d '\r\n')
 
 if [ -n "$mid" ]; then
   echo "ok: ${mid}"
