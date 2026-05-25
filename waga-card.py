@@ -39,7 +39,29 @@ def _load_stream():
 
 
 WS = _load_stream()
-USER_OID = os.environ.get("WAGA_USER_ID", "")
+
+
+def _env(key):
+    """取环境变量；缺失则回退解析同目录 .env（gitignore 的本地私有配置）。
+    这样无论调用方是否 export 过，waga-card.py 都能拿到 id。"""
+    v = os.environ.get(key)
+    if v:
+        return v
+    try:
+        with open(os.path.join(_HERE, ".env"), encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("export "):
+                    line = line[7:]
+                k, _, val = line.partition("=")
+                if k.strip() == key:
+                    return val.strip().strip("'\"")
+    except OSError:
+        pass
+    return ""
+
+
+USER_OID = _env("WAGA_USER_ID")
 
 
 def _state_path(name):
