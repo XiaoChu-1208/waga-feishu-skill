@@ -2,6 +2,8 @@
 .env.*
 *.local
 /tmp/
+__pycache__/
+*.pyc
 
 # 个人专用、含本机路径，不公开（保留在本地跑定时任务）
 ai-radar-daily.sh
