@@ -99,22 +99,29 @@ Waga（和 lark-cli）**自己没法开终端、启动 Claude Code**。它只能
 
 如果你想手动配、或了解底层依赖：
 
-- **lark-cli**：飞书官方 CLI。装 + `lark-cli config init` + `lark-cli auth login --domain im` 即可，无需自建应用配 scope。
+- **lark-cli**：飞书官方 CLI。装 + `lark-cli config init`（配好 App ID/Secret）即可。Waga 全程走 **bot 身份**（`--as bot`），**不需要 `lark-cli auth login`**（那是用户身份、访问个人资源才用）。
 - **Claude Code CLI**：`claude`，spawn worker / 流式卡片靠它的 `-p --output-format stream-json`。
 - **Python 3**（仅卡片功能 `waga-card.py` / `waga-stream.py` 用）：脚本一律用 `py` 启动器跑（Windows 上 `python` 常被 WindowsApps 桩占用）。卡片正文用 `<font color>` 上色，Windows 下 Python 调 `lark-cli.CMD` 时 `<>` 会被 cmd 当重定向符——脚本已自动改用 `node` 直跑 lark-cli 的 JS 绕过，无需你操心。
-- **三个环境变量**（`waga-setup.md` 会帮你写好）：
+- **配置放在仓库目录下的 `.env`**（已 gitignore，绝不上传）。所有脚本（`reply`/`react`/`card`/`spawn`/`doctor`）**以及 `/waga-on`** 都会自动 `source` 它，所以 **shell profile 里只需 export 一个 `WAGA_DIR`**：
 
-| 变量 | 含义（大白话） |
-|---|---|
-| `WAGA_CHAT_ID` | 你和机器人那个**对话框的编号**（`oc_` 开头）——消息从哪读 |
-| `WAGA_USER_ID` | 你这个人在飞书里的**身份编号**（`open_id`，`ou_` 开头）——回信发给谁 |
-| `WAGA_DIR` | 本仓库脚本所在目录（脚本放哪了） |
+| 变量 | 放哪 | 含义（大白话） |
+|---|---|---|
+| `WAGA_CHAT_ID` | `.env` | 你和机器人那个**对话框的编号**（`oc_` 开头）——消息从哪读 |
+| `WAGA_USER_ID` | `.env` | 你这个人在飞书里的**身份编号**（`open_id`，`ou_` 开头）——回信发给谁 |
+| `WAGA_DIR` | `.env` ＋ **shell profile** | 本仓库脚本所在目录；`/waga-on` 靠它找到 `.env` |
 
+仓库目录下的 `.env`（`waga-setup.md` 会帮你写好）：
 ```bash
 export WAGA_CHAT_ID="oc_xxxxxxxxxxxx"
 export WAGA_USER_ID="ou_xxxxxxxxxxxx"
 export WAGA_DIR="$HOME/path/to/waga-feishu-skill"
 export LARK_CLI_NO_PROXY=1     # lark-cli 走系统代理易被 reset，强制直连
+```
+
+然后**只把 `WAGA_DIR` 放进 shell profile**（macOS = `~/.zshrc`，Linux = `~/.bashrc`，Windows PowerShell = `$PROFILE`），`/waga-on` 就能自动 `source $WAGA_DIR/.env` 拿到其余变量，不必把 ID 在两处重复维护：
+```bash
+echo 'export WAGA_DIR="$HOME/path/to/waga-feishu-skill"' >> ~/.zshrc
+echo 'export LARK_CLI_NO_PROXY=1' >> ~/.zshrc
 ```
 
 手动拿 ID：先在飞书给 bot 发条消息建立单聊，再 `lark-cli im +chat-list --as bot` 取 `chat_id`、`lark-cli im +chat-messages-list` 取你的 `open_id`。
@@ -320,6 +327,25 @@ bash rebrand.sh Bilu
 - 会话关闭 = Monitor 死 = 自动注销，无残留。
 
 详见 [`waga-on.md`](./waga-on.md)。
+
+## 换到新电脑 / 多台机器 / Moving to a new machine
+
+⚠ **最容易误解的一点**：飞书 **App ID / App Secret 和登录 token 不在本仓库里**，也不会随同步盘（iCloud / Syncthing / Dropbox）走——它们存在 **lark-cli 自己的、每台机器独立的配置目录**（macOS: `~/.lark-cli/`）。仓库里的 `.env` 只有 `chat_id` / `open_id` / `WAGA_DIR` 三样。
+
+所以换一台新电脑（哪怕仓库已经同步过去了），lark-cli 这一层要重做：
+
+1. 装 lark-cli：`npx @larksuite/cli@latest install`
+2. **接回同一个已有应用**（强烈推荐——旧的 `chat_id`/`open_id` 继续有效，无需重抓）：
+   ```bash
+   # 零浏览器：用已有应用的 App ID + Secret 直接配（Secret 走 stdin，不进进程列表）
+   printf '%s' '<你的 App Secret>' | lark-cli config init --app-id <你的 App ID> --app-secret-stdin --brand feishu
+   ```
+   只有想**新建** app 时才用 `lark-cli config init --new`（浏览器流程）；但新 app 会让旧 `chat_id`/`open_id` 失配，得按 [`waga-setup.md`](./waga-setup.md) Step 3 重抓。
+3. 验证 bot 通了：`lark-cli im +chat-messages-list --chat-id "$WAGA_CHAT_ID" --as bot --page-size 1`（返回 `"ok": true` 即可）。
+4. 把 `.env` 里的 `WAGA_DIR` 改成新机器上仓库的真实路径，并在 profile 里 `export WAGA_DIR=...`。
+5. 装命令 + 加执行权限（见上方「安装命令」），跑 `/waga-on` 测通。
+
+> 💡 用 bot 身份收发消息**只需要 App ID + Secret**（`config init` 配好即可），**不需要 `auth login`**。`auth login`（用户身份）只有访问你个人日历/云盘/邮箱才用到，Waga 用不上。
 
 ## 注意 / Caveats
 

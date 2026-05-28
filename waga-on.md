@@ -65,14 +65,15 @@ export LARK_CLI_NO_PROXY=1
 NAME="${1:-$(basename "$(pwd)")}"
 NAME="${NAME:-default}"
 
-# 前置：这三个环境变量必须先配好（见 README「前置条件」）
-#   WAGA_CHAT_ID  你和 bot 的私聊 chat_id（oc_ 开头）
-#   WAGA_USER_ID  你自己的 open_id（ou_ 开头，回信发给谁）
-#   WAGA_DIR      本仓库脚本所在目录（waga-reply.sh / waga-react.sh）
+# 前置：profile 里【只需 export 一个 WAGA_DIR】（= 本仓库脚本所在目录）。
+#   chat_id / open_id 由下面这行从 "$WAGA_DIR/.env" 自动 source —— 跟
+#   reply/react/card/spawn/doctor 完全一致，.env 是 ID 的唯一真相源，
+#   不必再把 WAGA_CHAT_ID/WAGA_USER_ID 重复写进 profile（重复=易不一致）。
+[ -n "${WAGA_DIR:-}" ] && [ -f "$WAGA_DIR/.env" ] && . "$WAGA_DIR/.env"
 # 元数据
 CWD="$(pwd)"
-CHAT="${WAGA_CHAT_ID:?need WAGA_CHAT_ID, see README}"
-USER="${WAGA_USER_ID:?need WAGA_USER_ID, see README}"
+CHAT="${WAGA_CHAT_ID:?need WAGA_CHAT_ID —— 在 profile 里 export WAGA_DIR 且 \$WAGA_DIR/.env 存在即可；见 README「前置条件」}"
+USER="${WAGA_USER_ID:?need WAGA_USER_ID —— 同上，见 README「前置条件」}"
 WAGA_DIR=${WAGA_DIR}
 # Python 启动器：Windows 用 py（Git Bash 里 python 是坏桩），Mac/Linux 用 python3
 PY="$(command -v py 2>/dev/null || command -v python3 2>/dev/null || echo python3)"
