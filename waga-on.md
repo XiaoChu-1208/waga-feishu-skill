@@ -160,25 +160,35 @@ while true; do
   watchdog
 
   # 内容里的换行压成空格，避免多行消息被拆成多条幻影记录
+  # ⚠ stderr 单独导到 $ERRF（不要 2>&1）：lark-cli 经常把【非致命】警告
+  #   reactions_batch_query_failed: HTTP 5xx 打到 stderr，同时仍正常返回消息。
+  #   若并进 $out，下面的错误判定会被 HTTP 5xx 命中 → 整批好消息被丢弃 → 监听静默失聪。
+  ERRF="/tmp/waga_err_${NAME}.txt"
   out=$(lark-cli im +chat-messages-list --chat-id "$CHAT" --as bot \
-    --jq '.data.messages[] | select(.sender.sender_type=="user") | .message_id + "\t" + .create_time + "\t" + (.reply_to // "-") + "\t" + ((.content // "")|tostring|gsub("\n";" "))' 2>&1)
+    --jq '.data.messages[] | select(.sender.sender_type=="user") | .message_id + "\t" + .create_time + "\t" + (.reply_to // "-") + "\t" + ((.content // "")|tostring|gsub("\n";" "))' 2>"$ERRF")
 
-  # 错误识别：token 失效 + API 报错(ok:false/5xx/api_error)。命中就跳过本轮，绝不把报错 JSON 当消息解析
-  if echo "$out" | grep -qiE 'secret invalid|token.*expired|invalid_token|99991|10014|"ok" *: *false|api_error|HTTP [45][0-9][0-9]|internal error'; then
-    echo "[WAGA-ERR] $(echo "$out" | tr '\n' ' ' | cut -c1-200)"
+  # 致命错误【只认 auth/token 失效】（需重新扫码登录）；命中才跳过本轮。
+  # 瞬时 5xx/api_error/reactions_batch_query_failed 不再算致命——它们不影响本批消息。
+  if grep -qiE 'secret invalid|token.*expired|invalid_token|99991|10014' "$ERRF" 2>/dev/null \
+     || echo "$out" | grep -qiE 'secret invalid|token.*expired|invalid_token|99991|10014'; then
+    echo "[WAGA-ERR] auth 失效，请跑：lark-cli auth login --domain all  ::$(tr '\n' ' ' < "$ERRF" | cut -c1-160)"
     sleep 30; continue
   fi
+  # 瞬时警告：只记一行，继续处理 $out（下面 per-line 的 case "$mid" in om_*) 兜底挡掉任何非消息行）
+  [ -s "$ERRF" ] && echo "[WAGA-WARN] $(tr '\n' ' ' < "$ERRF" | cut -c1-160)"
 
   printf '%s\n' "$out" | while IFS=$'\t' read -r mid ctime replyto content; do
     [ -z "$mid" ] && continue
     # 兜底：只有真正的消息 id(om_ 开头)才处理，挡住任何非消息行（错误 JSON 片段等）
     case "$mid" in om_*) ;; *) continue ;; esac
-    grep -qF "$mid" "$SEEN" && continue
+    # ⚠ 必须用管道喂 grep（cat 文件 | grep -q）：本机沙箱会用信号杀掉「直接读文件且未命中」的
+    #   grep -q，于是处理子 shell 一碰到新消息就死、SEEN 永远不写、消息全静默丢失（心跳照跳）。
+    cat "$SEEN" | grep -qF "$mid" && continue
 
     # 引用回复路由（优先级最高）：用户引用了某张已登记的卡片
     #   → 我发的卡：路由到我 + 切粘性；别人发的卡：跳过留给那个 session。
-    if [ "$replyto" != "-" ] && [ "$replyto" != "null" ] && grep -qF "${replyto}|" "$SENTFILE"; then
-      if grep -qxF "${replyto}|${NAME}" "$SENTFILE"; then
+    if [ "$replyto" != "-" ] && [ "$replyto" != "null" ] && cat "$SENTFILE" | grep -qF "${replyto}|"; then
+      if cat "$SENTFILE" | grep -qxF "${replyto}|${NAME}"; then
         echo "$mid" >> "$SEEN"
         echo "$NAME" > "$STICKY"
         emit "$mid" "$ctime" "$content"

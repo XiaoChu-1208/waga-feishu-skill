@@ -182,11 +182,15 @@ while true; do
   if [ -f "$STOPFILE" ]; then sendcard "headless worker 下线（stopfile）"; rm -f "$STOPFILE" "$ALIVE"; exit 0; fi
   # 心跳 epoch|name|cwd|type；type=headless：这是「无窗口的 worker」（spawn 的 headless 会话）
   echo "$(date +%s)|${NAME}|${WORKDIR}|headless" > "$ALIVE"
+  # ⚠ stderr 单独导到 $ERRF（不要 2>&1）：lark-cli 非致命警告 reactions_batch_query_failed:
+  #   HTTP 5xx 会打到 stderr 同时仍返回正常消息；并进 $out 会被错误判定误伤 → worker 静默失聪。
+  ERRF="/tmp/waga_err_spawn_${NAME}.txt"
   out=$(lark-cli im +chat-messages-list --chat-id "$CHAT" --as bot \
-    --jq '.data.messages[] | select(.sender.sender_type=="user") | .message_id + "\t" + (.reply_to // "-") + "\t" + ((.content // "")|tostring|gsub("\n";" "))' 2>&1)
+    --jq '.data.messages[] | select(.sender.sender_type=="user") | .message_id + "\t" + (.reply_to // "-") + "\t" + ((.content // "")|tostring|gsub("\n";" "))' 2>"$ERRF")
 
-  # API 报错(token失效/ok:false/5xx)就跳过本轮，绝不把报错 JSON 当消息
-  if echo "$out" | grep -qiE 'secret invalid|token.*expired|invalid_token|99991|10014|"ok" *: *false|api_error|HTTP [45][0-9][0-9]|internal error'; then
+  # 致命错误【只认 auth/token 失效】（需重新扫码）；瞬时 5xx 不再误伤、不跳过本批。
+  if grep -qiE 'secret invalid|token.*expired|invalid_token|99991|10014' "$ERRF" 2>/dev/null \
+     || echo "$out" | grep -qiE 'secret invalid|token.*expired|invalid_token|99991|10014'; then
     sleep 30; continue
   fi
 
@@ -194,11 +198,13 @@ while true; do
   while IFS=$'\t' read -r mid replyto content; do
     [ -z "$mid" ] && continue
     case "$mid" in om_*) ;; *) continue ;; esac   # 只处理真消息 id
-    grep -qF "$mid" "$SEEN" && continue
+    # ⚠ 管道喂 grep（cat 文件 | grep -q）：本机沙箱信号杀「直接读文件且未命中」的 grep -q，
+    #   否则处理子 shell 一碰新消息就死、SEEN 不写、消息静默丢失（心跳照跳）。
+    cat "$SEEN" | grep -qF "$mid" && continue
     # 引用回复路由（最高优先级，与 waga-on.md 一致）：用户引用了某张已登记的卡片
     #   → 我发的卡：路由到我 + 切粘性；别人发的卡：跳过留给那个 worker。
-    if [ "$replyto" != "-" ] && [ "$replyto" != "null" ] && grep -qF "${replyto}|" "$SENTFILE"; then
-      if grep -qxF "${replyto}|${NAME}" "$SENTFILE"; then
+    if [ "$replyto" != "-" ] && [ "$replyto" != "null" ] && cat "$SENTFILE" | grep -qF "${replyto}|"; then
+      if cat "$SENTFILE" | grep -qxF "${replyto}|${NAME}"; then
         echo "$mid" >> "$SEEN"; echo "$NAME" > "$STICKY"; dispatch "$mid" "$content"
       fi
       continue
