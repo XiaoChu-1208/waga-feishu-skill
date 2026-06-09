@@ -45,7 +45,18 @@ for _s in (sys.stdout, sys.stderr):
 # WindowsApps 的坏桩，所以本脚本一律用 `py` 启动（见 waga-spawn.sh）。
 LARK = shutil.which("lark-cli") or "lark-cli"
 CLAUDE = shutil.which("claude") or "claude"
+# ⚠ waga-spawn.sh 把飞书 open_id 赋给了 shell 变量 USER，覆盖了系统环境变量 USER
+# （= 真实登录名），会随子进程传给 claude，导致 claude 钥匙串认证失败、报「Not logged in」。
+# 这里把 USER/LOGNAME 强制还原成真实系统用户名（pwd 模块免疫环境污染），保护 claude 登录态。
+try:
+    import pwd
+    _REAL_USER = pwd.getpwuid(os.getuid()).pw_name
+except Exception:
+    _REAL_USER = os.environ.get("USERNAME") or ""
 ENV = dict(os.environ, LARK_CLI_NO_PROXY="1")
+if _REAL_USER:
+    ENV["USER"] = _REAL_USER
+    ENV["LOGNAME"] = _REAL_USER
 
 # 注入给 headless claude 的角色说明（--append-system-prompt）。
 # 解决「第一次跟新会话打招呼，它却大谈 /waga-on、om_xxx、监听器」的尴尬：
@@ -111,8 +122,18 @@ def _clip(text, cap=CARD_MD_CAP):
 
 
 def name_line(name):
-    """内联蓝色加粗 name —— 所有 waga 卡片的统一开头（替代 [name] 方括号/大头条）"""
-    return f"<font color='blue'>**{name}**</font>"
+    """内联蓝色加粗 name —— 所有 waga 卡片的统一开头（替代 [name] 方括号/大头条）。
+    若设了环境变量 WAGA_ENGINE_LABEL（如 cursor），在 name 后追加一个灰色 ·标签，
+    用来在飞书侧区分这张卡是哪个引擎拉起的（Cursor vs Claude）。Claude 侧不设=原样。"""
+    tag = f"<font color='blue'>**{name}**</font>"
+    label = os.environ.get("WAGA_ENGINE_LABEL", "").strip()
+    if label:
+        tag += f" <font color='grey'>· {label}</font>"
+    # 引擎标签右边再跟当前模型（WAGA_ENGINE_MODEL），如 · cursor · gemini-3.5-flash
+    model = os.environ.get("WAGA_ENGINE_MODEL", "").strip()
+    if model:
+        tag += f" <font color='grey'>· {model}</font>"
+    return tag
 
 
 def build_card(name, state, body_text, tools, footer, elapsed):

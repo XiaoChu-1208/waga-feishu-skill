@@ -18,6 +18,14 @@ waga-card.py — 给【已开窗口的活会话】用的步进式进度卡片。
   py waga-card.py error <name> "失败原因"
 
 start 会打印 message_id 到 stdout。done/error 跑完清状态文件。
+
+【样式约定 · 重要】发给用户的一切卡片——包括多段落的「富报告/汇报」——都走本脚本的
+  `say`（一次性）或 start/step/done（进度），它们统一是 schema 2.0 markdown + 顶部蓝色
+  name_line，和上线卡/进度卡同一调性。**不要**再手拼旧版 interactive 卡（config + 彩色
+  header 横幅 + elements[tag:div]/lark_md + action 按钮）——那套和房子样式对不上、显得怪，
+  且按钮在轮询架构点不了。富报告就用 `say` 塞结构化 markdown（**加粗**/`代码`/列表/
+  [链接]()/<font color>），需要分段用空行或 markdown 标题。
+  （2026-06-09 用户拍板：卡片样式必须按 WAGA 技能来，别另起炉灶拼 interactive 卡。）
 """
 import argparse
 import glob
