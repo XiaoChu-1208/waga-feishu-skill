@@ -51,6 +51,7 @@ export WAGA_SIGNAL_TABLE=<信号表-table_id>
 | `waga-card.py` + `waga-stream.py` | **私聊**卡片引擎（online/who/say/start-step-done 进度卡） |
 | `waga-gcard.py` | **群**卡片（统一制式，按 agent 上色，可 @人）← 2026-06-12 新增 |
 | `waga-signal.sh` | 往「信号台」多维表格写一行（agent 间异步信号）← 新增 |
+| `waga-handoff.sh` | **代表架构**：代表给本机另一个 session 一键派活（同机走 /tmp 总线）← 新增。`waga-handoff.sh <目标> "任务"` 派活；目标 session 挂 `waga-handoff.sh watch <自己名>` 接活 |
 | `waga-ureply.sh` | 用户身份代发（⚠ 已废，见 §8，留作记录别用） |
 | `waga-spawn.sh` | 拉起 headless worker（`claude -p --resume`，自收发飞书） |
 | `waga-doctor.sh` | 自检（lark-cli 连通/粘性目标/各 worker 心跳/日志） |
