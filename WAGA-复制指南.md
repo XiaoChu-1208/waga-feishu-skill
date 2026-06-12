@@ -80,6 +80,10 @@ export WAGA_SIGNAL_TABLE=<信号表-table_id>
   （用户身份能读自己所在的群），其余逻辑不变。收发不受影响。Waga 个人 Mac 那台 bot 有 scope 用的是 `--as bot`，按你本机情况二选一。
 - ⚠ **群监听会静默死**（实测踩过）：每轮写心跳 `/tmp/waga_group_alive.txt`，另挂一个**看门狗 Monitor**
   每 60s 查心跳、停 >120s 就报警提醒重挂。否则监听死了用户那侧 @你 石沉大海、看不出原因。
+- ⚠ **字段分隔符用 TAB(`\t`) 不要用 SOH(`\001`)**：手写 Monitor 命令时 SOH 控制字符易丢成空字符串，
+  导致 jq 拼接的字段全粘成一坨、`text` 解析成空 → 监听【活着、标 SEEN、却一条都不 emit】(聋哑)。
+  jq 用 `+ "\t" +` 拼、bash 用 `IFS=$'\t' read`，把可能含分隔符的 text 放最后并 `gsub("\t";" ")`。
+  诊断：读 Monitor 任务 .output 文件，只有 re-arm 一行 = 没 emit 过 = 聋了。
 
 > 两个监听是独立 Monitor，互不干扰。改名=同窗口重跑 `/waga-on <新名>`（覆盖语义，先停旧再挂新）。
 
